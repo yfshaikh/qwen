@@ -1,0 +1,12 @@
+docs/
+.env
+frontend/node_modules/
+frontend/dist/
+frontend/build/
+frontend/public/
+frontend/.env
+
+
+backend/.env
+backend/venv/
+backend/__pycache__/
