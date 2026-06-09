@@ -16,5 +16,40 @@ services:
       timeout: 2s
       retries: 30
 
+  app:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgresql://engram:engram@db:5432/engram
+      ENGRAM_STORAGE_BACKEND: postgres
+      # OpenRouter key is optional — ingest/recall/graph work without it; the
+      # Keeper extractor + tutor replies need it. Put it in .env (compose reads it).
+      OPENROUTER_API_KEY: ${OPENROUTER_API_KEY:-}
+      OPENROUTER_BASE_URL: ${OPENROUTER_BASE_URL:-https://openrouter.ai/api/v1}
+      ENGRAM_MODEL_TUTOR: ${ENGRAM_MODEL_TUTOR:-openai/gpt-4o-mini}
+      ENGRAM_MODEL_EXTRACTOR: ${ENGRAM_MODEL_EXTRACTOR:-openai/gpt-4o-mini}
+      ENGRAM_MODEL_REFLECTOR: ${ENGRAM_MODEL_REFLECTOR:-openai/gpt-4o}
+      ENGRAM_EMBEDDER_KIND: ${ENGRAM_EMBEDDER_KIND:-local}
+      ENGRAM_EMBEDDING_DIM: ${ENGRAM_EMBEDDING_DIM:-1024}
+      ENGRAM_SWEEP_ENABLED: ${ENGRAM_SWEEP_ENABLED:-false}
+    ports:
+      - "8000:8000"
+
+  frontend:
+    build:
+      context: ./frontend
+      args:
+        # Browser runs on the host, so it reaches the backend at localhost:8000
+        # (CORS is open on the API). Rebuild with a different base for other hosts.
+        VITE_API_BASE: "http://localhost:8000"
+    depends_on:
+      - app
+    ports:
+      - "5173:80"
+
 volumes:
   engram_pgdata:
