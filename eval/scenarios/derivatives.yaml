@@ -1,0 +1,117 @@
+# Deterministic eval scenario: a three-session calculus arc for one learner.
+#
+# Session 1 MASTERS the chain rule and the power rule (explicit quiz_correct
+# mastery signals). Sessions 2-3 then generate 10 more raw events on *other*
+# topics, so by probe time the session-1 mastery evidence has fallen out of the
+# baseline's last-10-events window. Engram's consolidated graph retains it.
+#
+# Each session lists the raw `events` to ingest AND the canned `extraction`
+# the scripted FakeLLM extractor returns for that session's consolidation
+# (extractions are consumed in session order).
+
+name: derivatives-arc
+persona: >
+  Maya, a first-year calculus student. Session 1 nails differentiation rules;
+  sessions 2-3 move on to the product rule, related rates, and a first look at
+  integration by parts.
+learner_id: maya
+mastery_threshold: 0.6
+baseline_window: 10
+recall_budget: 600
+
+sessions:
+  - title: "Session 1 — differentiation rules (chain + power rule mastered)"
+    events:
+      - type: utterance
+        text: "Can we go over the chain rule? I get lost with nested functions."
+      - type: tutor_explanation
+        text: "Explained the chain rule: differentiate the outer function, multiply by the inner derivative."
+      - type: quiz_result
+        text: "Differentiated sin(3x^2) correctly using the chain rule."
+        signals: { concept: "chain rule", mastery: 0.9, correct: true }
+      - type: utterance
+        text: "The power rule feels much easier after that."
+      - type: quiz_result
+        text: "Differentiated x^7 and 4x^3 correctly with the power rule."
+        signals: { concept: "power rule", mastery: 0.85, correct: true }
+      - type: utterance
+        text: "Great session — the chain rule finally clicked!"
+    extraction:
+      items:
+        - type: concept
+          label: "chain rule"
+          summary: "differentiate the outer function, multiply by the inner derivative"
+          observation: 0.9
+          evidence:
+            - { kind: quiz_correct, content: "differentiated sin(3x^2) correctly", importance: 0.9 }
+        - type: concept
+          label: "power rule"
+          summary: "bring the exponent down, subtract one from it"
+          observation: 0.85
+          evidence:
+            - { kind: quiz_correct, content: "differentiated x^7 and 4x^3 correctly", importance: 0.8 }
+
+  - title: "Session 2 — product rule struggles (5 events)"
+    events:
+      - type: utterance
+        text: "Today I want to tackle the product rule."
+      - type: tutor_explanation
+        text: "Explained the product rule: f'g + fg'."
+      - type: quiz_result
+        text: "Mixed up the terms when differentiating x^2 * e^x."
+        signals: { concept: "product rule", mastery: 0.3, correct: false }
+      - type: utterance
+        text: "I keep forgetting which derivative goes where."
+      - type: utterance
+        text: "Implicit differentiation looks scary — maybe next time."
+    extraction:
+      items:
+        - type: concept
+          label: "product rule"
+          summary: "derivative of a product: f'g plus fg'"
+          observation: 0.3
+          evidence:
+            - { kind: quiz_wrong, content: "mixed up terms on x^2 * e^x", importance: 0.7 }
+            - { kind: struggle, content: "forgets which derivative goes where", importance: 0.6 }
+        - type: concept
+          label: "implicit differentiation"
+          summary: "differentiating both sides of an equation in x and y"
+          observation: 0.2
+          evidence:
+            - { kind: asked_about, content: "called implicit differentiation scary", importance: 0.4 }
+
+  - title: "Session 3 — related rates + first look at integration by parts (5 events)"
+    events:
+      - type: utterance
+        text: "Can we start related rates problems?"
+      - type: tutor_explanation
+        text: "Worked through the expanding-circle related rates example."
+      - type: quiz_result
+        text: "Set up the ladder problem but flipped the sign of dh/dt."
+        signals: { concept: "related rates", mastery: 0.4, correct: false }
+      - type: utterance
+        text: "What is integration by parts? I saw it in the textbook."
+      - type: tutor_explanation
+        text: "Gave a first look at integration by parts: integral of u dv = uv minus integral of v du."
+        signals: { concept: "integration by parts", mastery: 0.2 }
+    extraction:
+      items:
+        - type: concept
+          label: "related rates"
+          summary: "linking rates of change of related quantities via the chain rule"
+          observation: 0.4
+          evidence:
+            - { kind: quiz_wrong, content: "flipped the sign of dh/dt in the ladder problem", importance: 0.7 }
+        - type: concept
+          label: "integration by parts"
+          summary: "integral of u dv equals uv minus integral of v du"
+          observation: 0.2
+          evidence:
+            - { kind: asked_about, content: "asked what integration by parts is", importance: 0.5 }
+
+# Probe time = after session 3. `mastered: true` probes were mastered in
+# session 1 — outside the baseline window, inside Engram's graph.
+probes:
+  - { concept: "chain rule", mastered: true }
+  - { concept: "power rule", mastered: true }
+  - { concept: "integration by parts", mastered: false }
