@@ -42,6 +42,8 @@ class LearningEvent:
     refs: dict[str, Any] = field(default_factory=dict)
     signals: dict[str, Any] = field(default_factory=dict)
     ts: datetime = field(default_factory=_now)
+    id: str | None = None
+    consolidated_at: datetime | None = None
 
 
 @dataclass(slots=True)
@@ -85,6 +87,22 @@ class Evidence:
 
 
 @dataclass(slots=True)
+class AuditEntry:
+    """One memory-agent operation, for observability + provenance (spec §4.2)."""
+
+    learner_id: str
+    op: str  # extract|link|merge|resolve_contradiction|decay|prune|recall|consolidate
+    id: str | None = None
+    input_refs: dict[str, Any] | None = None
+    output_refs: dict[str, Any] | None = None
+    rationale: str | None = None
+    model: str | None = None
+    tokens: int | None = None
+    cost: float | None = None
+    ts: datetime = field(default_factory=_now)
+
+
+@dataclass(slots=True)
 class Message:
     role: str  # "system" | "user" | "assistant" | "tool"
     content: str
@@ -108,3 +126,25 @@ class RecallResult:
 class GraphView:
     nodes: list[dict[str, Any]]
     edges: list[dict[str, Any]]
+
+
+# --- Memory Keeper extraction outputs (LLM-produced, normalized into the graph) ---
+
+
+@dataclass(slots=True)
+class ExtractedEvidence:
+    kind: str  # one of EvidenceKind values
+    content: str
+    importance: float | None = None
+
+
+@dataclass(slots=True)
+class ExtractedItem:
+    """A candidate node the extractor pulled out of a batch of events."""
+
+    type: str  # 'concept' | 'preference' | 'goal'
+    label: str
+    summary: str | None = None
+    observation: float | None = None  # mastery observation in [0,1] when inferable
+    evidence: list[ExtractedEvidence] = field(default_factory=list)
+    source_refs: list[Any] = field(default_factory=list)
