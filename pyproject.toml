@@ -18,6 +18,8 @@ dependencies = [
   "openai>=1.50",
   "asyncpg>=0.29",
   "pgvector>=0.3.6",
+  "numpy>=1.26",
+  "pyyaml>=6.0",
 ]
 
 [project.optional-dependencies]
