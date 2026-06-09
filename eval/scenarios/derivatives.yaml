@@ -1,0 +1,92 @@
+# Engram ablation scenario: a calculus learner across three sessions.
+#
+# The arc demonstrates the limited-context problem. In session 1 the learner
+# MASTERS derivatives (a quiz they get right + a demonstration). Sessions 2 and 3
+# move on to new material (limits, integrals) and generate enough chatter that
+# session 1's mastery evidence falls outside the baseline's last-N=10 event
+# window. At probe time:
+#   * Memory arm  -> consolidation synthesized a durable `derivatives` node with
+#                    high mastery, so recall surfaces it and the tutor SKIPS the
+#                    re-explanation.
+#   * Baseline arm-> the last-10 raw events no longer contain derivatives mastery
+#                    evidence, so the naive tutor RE-EXPLAINS already-mastered
+#                    material (the failure we want to show).
+#
+# Each session lists the raw `events` AND the `extraction` the scripted Keeper
+# should emit for that session, so consolidation is fully deterministic (no LLM).
+#
+# Mastery-evidence detection for the BASELINE arm is mechanical: an event counts
+# as mastery evidence for concept C iff its `signals.mastery >= mastery_threshold`
+# and `signals.concept == C`. These signals live only on the demonstrative events.
+
+learner_id: alice
+persona: "first-year calculus student"
+
+mastery_threshold: 0.6
+baseline_window: 10
+
+sessions:
+  # ---- Session 1: struggles with, then MASTERS, derivatives ----
+  - events:
+      - {type: utterance, text: "I really don't get derivatives at all"}
+      - {type: utterance, text: "what does the slope of a curve even mean?"}
+      - {type: explanation, text: "tutor explains derivatives as instantaneous rate of change"}
+      - {type: quiz_result, text: "correctly differentiated x^2 -> 2x",
+         signals: {mastery: 0.9, concept: derivatives}}
+      - {type: demo, text: "applied the power rule to 3x^4 unprompted",
+         signals: {mastery: 0.9, concept: derivatives}}
+    extraction:
+      items:
+        - type: concept
+          label: derivatives
+          summary: "instantaneous rate of change; slope of a curve"
+          observation: 0.9
+          evidence:
+            - {kind: quiz_correct, content: "differentiated x^2 to 2x correctly", importance: 0.9}
+            - {kind: demonstrated, content: "used the power rule on 3x^4 unprompted", importance: 0.9}
+
+  # ---- Session 2: moves on to limits (new material, lots of chatter) ----
+  - events:
+      - {type: utterance, text: "now I want to understand limits"}
+      - {type: utterance, text: "what is an epsilon-delta definition?"}
+      - {type: explanation, text: "tutor explains limits as the value a function approaches"}
+      - {type: utterance, text: "so a limit is about approaching, not reaching?"}
+      - {type: quiz_result, text: "evaluated a one-sided limit with a small slip",
+         signals: {mastery: 0.5, concept: limits}}
+      - {type: utterance, text: "epsilon-delta still feels shaky"}
+    extraction:
+      items:
+        - type: concept
+          label: limits
+          summary: "the value a function approaches; epsilon-delta"
+          observation: 0.5
+          evidence:
+            - {kind: struggle, content: "epsilon-delta definition still shaky", importance: 0.7}
+            - {kind: explained, content: "tutor walked through approaching vs reaching", importance: 0.5}
+
+  # ---- Session 3: integrals (more new material, more chatter) ----
+  - events:
+      - {type: utterance, text: "let's start integrals"}
+      - {type: utterance, text: "is integration the opposite of differentiation?"}
+      - {type: explanation, text: "tutor explains integrals as area under a curve"}
+      - {type: utterance, text: "what's the fundamental theorem of calculus?"}
+      - {type: quiz_result, text: "set up a definite integral but missed the constant",
+         signals: {mastery: 0.45, concept: integrals}}
+      - {type: utterance, text: "I think I need more practice with the constant of integration"}
+    extraction:
+      items:
+        - type: concept
+          label: integrals
+          summary: "area under a curve; antiderivative; fundamental theorem"
+          observation: 0.45
+          evidence:
+            - {kind: struggle, content: "forgot the constant of integration", importance: 0.7}
+            - {kind: explained, content: "tutor explained area under a curve", importance: 0.5}
+
+# Probes: at the start of a hypothetical session 4, would the tutor re-explain
+# each concept? `mastered: true` concepts are the ones the learner has truly
+# mastered (derivatives) and that the memory arm should NOT re-explain.
+probes:
+  - {concept: derivatives, mastered: true}
+  - {concept: limits, mastered: false}
+  - {concept: integrals, mastered: false}
