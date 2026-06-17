@@ -49,6 +49,13 @@ class Settings(BaseSettings):
     recall_fanout: int = Field(default=10, alias="ENGRAM_RECALL_FANOUT")
     recall_default_budget: int = Field(default=800, alias="ENGRAM_RECALL_DEFAULT_BUDGET")
 
+    # Keeper / consolidation (spec §3.6); env-overridable for eval sweeps.
+    keeper_tau_high: float = Field(default=0.86, alias="ENGRAM_KEEPER_TAU_HIGH")
+    keeper_tau_low: float = Field(default=0.72, alias="ENGRAM_KEEPER_TAU_LOW")
+    keeper_ewma_alpha: float = Field(default=0.3, alias="ENGRAM_KEEPER_EWMA_ALPHA")
+    keeper_salience_bump: float = Field(default=0.3, alias="ENGRAM_KEEPER_SALIENCE_BUMP")
+    keeper_prune_floor: float = Field(default=0.05, alias="ENGRAM_KEEPER_PRUNE_FLOOR")
+
     def model_for(self, role: str) -> str:
         try:
             return {

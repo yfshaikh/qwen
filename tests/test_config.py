@@ -70,3 +70,18 @@ def test_recall_overrides(monkeypatch):
     assert s.recall_w_relevance == 0.6
     assert s.recall_seed_k == 3
     assert s.recall_default_budget == 500
+
+
+def test_keeper_defaults(monkeypatch):
+    s = _settings(monkeypatch)
+    assert s.keeper_tau_high == 0.86
+    assert s.keeper_tau_low == 0.72
+    assert s.keeper_ewma_alpha == 0.3
+    assert s.keeper_salience_bump == 0.3
+    assert s.keeper_prune_floor == 0.05
+
+
+def test_keeper_overrides(monkeypatch):
+    s = _settings(monkeypatch, ENGRAM_KEEPER_TAU_HIGH="0.9", ENGRAM_KEEPER_PRUNE_FLOOR="0.1")
+    assert s.keeper_tau_high == 0.9
+    assert s.keeper_prune_floor == 0.1
