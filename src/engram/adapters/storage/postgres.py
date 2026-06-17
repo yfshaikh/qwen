@@ -7,6 +7,7 @@ and a jsonb codec (so refs/signals/source_refs round-trip as Python objects).
 from __future__ import annotations
 
 import json
+from contextlib import asynccontextmanager
 
 import asyncpg
 from pgvector.asyncpg import register_vector
@@ -31,6 +32,22 @@ async def _init_conn(conn: asyncpg.Connection) -> None:
     await register_vector(conn)
     await conn.set_type_codec(
         "jsonb", encoder=json.dumps, decoder=json.loads, schema="pg_catalog"
+    )
+
+
+_EVENT_COLS = "id, learner_id, type, text, refs, signals, ts, consolidated_at"
+
+
+def _row_to_event(row: asyncpg.Record) -> LearningEvent:
+    return LearningEvent(
+        id=str(row["id"]),
+        learner_id=row["learner_id"],
+        type=row["type"],
+        text=row["text"],
+        refs=row["refs"] if row["refs"] is not None else {},
+        signals=row["signals"] if row["signals"] is not None else {},
+        ts=row["ts"],
+        consolidated_at=row["consolidated_at"],
     )
 
 
@@ -236,3 +253,101 @@ class PostgresStorage:
                 )
             )
         return out
+
+    # --- consolidation (Phase 2) ----------------------------------------
+
+    async def get_pending_events(self, learner_id: str) -> list[LearningEvent]:
+        async with self._pool.acquire() as conn:
+            rows = await conn.fetch(
+                f"SELECT {_EVENT_COLS} FROM engram_events "
+                "WHERE learner_id = $1 AND consolidated_at IS NULL ORDER BY ts",
+                learner_id,
+            )
+            return [_row_to_event(r) for r in rows]
+
+    async def get_live_nodes(self, learner_id: str) -> list[Node]:
+        async with self._pool.acquire() as conn:
+            rows = await conn.fetch(
+                f"SELECT {_NODE_COLS} FROM engram_nodes "
+                "WHERE learner_id = $1 AND forgotten_at IS NULL",
+                learner_id,
+            )
+            return [_row_to_node(r) for r in rows]
+
+    @asynccontextmanager
+    async def consolidation_lock(self, learner_id: str):
+        async with self._pool.acquire() as conn:
+            got = await conn.fetchval(
+                "SELECT pg_try_advisory_lock(hashtext($1))", learner_id
+            )
+            try:
+                yield bool(got)
+            finally:
+                if got:
+                    await conn.fetchval(
+                        "SELECT pg_advisory_unlock(hashtext($1))", learner_id
+                    )
+
+    async def apply_consolidation(self, plan) -> None:
+        async with self._pool.acquire() as conn:
+            async with conn.transaction():
+                idmap: dict[str, str] = {}
+                for n in plan.new_nodes:
+                    real = await conn.fetchval(
+                        """
+                        INSERT INTO engram_nodes
+                          (learner_id, type, label, summary, mastery, confidence,
+                           salience, embedding, source_refs, forgotten_at, last_seen_at)
+                        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)
+                        RETURNING id
+                        """,
+                        n.learner_id, n.type.value, n.label, n.summary, n.mastery,
+                        n.confidence, n.salience, n.embedding, n.source_refs,
+                        n.forgotten_at, n.last_seen_at,
+                    )
+                    idmap[n.id] = str(real)
+
+                def rid(x: str) -> str:
+                    return idmap.get(x, x)
+
+                for e in plan.new_edges:
+                    await conn.execute(
+                        "INSERT INTO engram_edges (learner_id, source_id, target_id, type, weight)"
+                        " VALUES ($1,$2,$3,$4,$5)",
+                        e.learner_id, rid(e.source_id), rid(e.target_id), e.type.value, e.weight,
+                    )
+                for ev in plan.new_evidence:
+                    await conn.execute(
+                        "INSERT INTO engram_evidence"
+                        " (node_id, kind, content, source_ref, embedding, importance)"
+                        " VALUES ($1,$2,$3,$4,$5,$6)",
+                        rid(ev.node_id), ev.kind.value, ev.content, ev.source_ref,
+                        ev.embedding, ev.importance,
+                    )
+                for n in plan.node_updates:
+                    await conn.execute(
+                        "UPDATE engram_nodes SET mastery=$1, confidence=$2, salience=$3,"
+                        " last_seen_at=$4, forgotten_at=$5 WHERE id=$6",
+                        n.mastery, n.confidence, n.salience, n.last_seen_at,
+                        n.forgotten_at, n.id,
+                    )
+                for mp in plan.mastery_history:
+                    await conn.execute(
+                        "INSERT INTO engram_mastery_history (node_id, mastery, confidence)"
+                        " VALUES ($1,$2,$3)",
+                        rid(mp.node_id), mp.mastery, mp.confidence,
+                    )
+                for a in plan.audit:
+                    await conn.execute(
+                        "INSERT INTO engram_audit"
+                        " (learner_id, op, input_refs, output_refs, rationale, model, tokens, cost)"
+                        " VALUES ($1,$2,$3,$4,$5,$6,$7,$8)",
+                        plan.learner_id, a.op, a.input_refs, a.output_refs,
+                        a.rationale, a.model, a.tokens, a.cost,
+                    )
+                if plan.processed_event_ids:
+                    await conn.execute(
+                        "UPDATE engram_events SET consolidated_at = now()"
+                        " WHERE id = ANY($1::uuid[])",
+                        plan.processed_event_ids,
+                    )
