@@ -100,8 +100,23 @@ class Engram:
             budget = budget if budget is not None else 800
         return await recall.run(learner_id, query, budget)
 
-    async def consolidate(self, learner_id: str) -> None:
-        raise NotImplementedError("Phase 2")
+    async def consolidate(self, learner_id: str):
+        from engram.core.keeper import Keeper, KeeperParams
+
+        s = self.settings
+        if s is not None:
+            params = KeeperParams(
+                tau_high=s.keeper_tau_high,
+                tau_low=s.keeper_tau_low,
+                ewma_alpha=s.keeper_ewma_alpha,
+                salience_bump=s.keeper_salience_bump,
+                prune_floor=s.keeper_prune_floor,
+                decay=s.recall_decay,
+            )
+        else:
+            params = KeeperParams()
+        keeper = Keeper(self.storage, self.llm, self.embedder, params)
+        return await keeper.consolidate(learner_id)
 
     async def graph(self, learner_id: str, focus: str | None = None) -> GraphView:
         raise NotImplementedError("Phase 1")

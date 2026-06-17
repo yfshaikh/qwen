@@ -17,8 +17,6 @@ async def test_health_delegates_to_storage():
 async def test_remaining_verbs_are_later_phase_stubs():
     eng = _engram()
     with pytest.raises(NotImplementedError):
-        await eng.consolidate("a")
-    with pytest.raises(NotImplementedError):
         await eng.graph("a")
 
 
@@ -56,6 +54,62 @@ async def test_recall_against_seeded_graph():
     await seed_graph(eng.storage, eng.embedder, fixture)
     res = await eng.recall("alice", "limits", budget=800)
     assert "Limits" in res.text_block
+
+
+async def test_consolidate_returns_report():
+    import json
+
+    from engram.core.models import LearningEvent
+
+    eng = _engram()
+    await eng.ingest([LearningEvent(learner_id="a", type="utterance", text="t")])
+    eng.llm.canned_text = json.dumps(
+        {"concepts": [{"label": "Limits", "summary": "s",
+                       "evidence": [{"kind": "quiz_correct", "content": "ok"}]}],
+         "preferences": [], "goals": [], "relations": []}
+    )
+    report = await eng.consolidate("a")
+    assert report.nodes_created == 1
+    assert len(eng.storage.nodes) == 1
+
+
+async def test_consolidate_skipped_when_locked():
+    eng = _engram()
+    async with eng.storage.consolidation_lock("a"):
+        report = await eng.consolidate("a")
+    assert report.skipped is True
+
+
+async def test_ingest_consolidate_recall_loop_live(database_url):
+    import json
+    import uuid
+
+    from engram.adapters.storage.postgres import PostgresStorage
+    from engram.core.engram import Engram
+    from engram.core.models import LearningEvent
+    from tests.fakes import FakeEmbedder, FakeLLM
+
+    learner = f"t-{uuid.uuid4()}"
+    storage = PostgresStorage(database_url)
+    await storage.connect()
+    try:
+        llm = FakeLLM(canned_text=json.dumps(
+            {"concepts": [{"label": "Limits", "summary": "approach",
+                           "evidence": [{"kind": "quiz_correct", "content": "ok"}]}],
+             "preferences": [], "goals": [], "relations": []}
+        ))
+        eng = Engram(storage=storage, llm=llm, embedder=FakeEmbedder(dim=1024))
+        await eng.ingest([LearningEvent(learner_id=learner, type="utterance", text="limit?")])
+        report = await eng.consolidate(learner)
+        assert report.nodes_created == 1
+        # second run is a no-op (watermark)
+        report2 = await eng.consolidate(learner)
+        assert report2.processed_events == 0
+        # recall now reads the Keeper-built graph
+        res = await eng.recall(learner, "limits", budget=800)
+        assert "Limits" in res.text_block
+    finally:
+        await storage.close()
 
 
 async def test_mem0_aliases_point_at_canonical_verbs():
