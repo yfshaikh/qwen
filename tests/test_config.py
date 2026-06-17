@@ -47,3 +47,26 @@ def test_model_for_unknown_role_raises(monkeypatch):
 def test_embedding_dim_override(monkeypatch):
     s = _settings(monkeypatch, ENGRAM_EMBEDDING_DIM="512")
     assert s.embedding_dim == 512
+
+
+def test_recall_defaults(monkeypatch):
+    s = _settings(monkeypatch)
+    assert s.recall_w_recency == 0.3
+    assert s.recall_w_importance == 0.3
+    assert s.recall_w_relevance == 0.4
+    assert s.recall_seed_k == 8
+    assert s.recall_hops == 2
+    assert s.recall_fanout == 10
+    assert s.recall_default_budget == 800
+
+
+def test_recall_overrides(monkeypatch):
+    s = _settings(
+        monkeypatch,
+        ENGRAM_RECALL_W_RELEVANCE="0.6",
+        ENGRAM_RECALL_SEED_K="3",
+        ENGRAM_RECALL_DEFAULT_BUDGET="500",
+    )
+    assert s.recall_w_relevance == 0.6
+    assert s.recall_seed_k == 3
+    assert s.recall_default_budget == 500

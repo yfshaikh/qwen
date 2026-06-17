@@ -39,6 +39,16 @@ class Settings(BaseSettings):
 
     embedding_dim: int = Field(default=1024, alias="ENGRAM_EMBEDDING_DIM")
 
+    # Recall scoring + traversal (spec §4.4); env-overridable for eval sweeps.
+    recall_w_recency: float = Field(default=0.3, alias="ENGRAM_RECALL_W_RECENCY")
+    recall_w_importance: float = Field(default=0.3, alias="ENGRAM_RECALL_W_IMPORTANCE")
+    recall_w_relevance: float = Field(default=0.4, alias="ENGRAM_RECALL_W_RELEVANCE")
+    recall_decay: float = Field(default=0.98, alias="ENGRAM_RECALL_DECAY")  # Keeper (Phase 2)
+    recall_seed_k: int = Field(default=8, alias="ENGRAM_RECALL_SEED_K")
+    recall_hops: int = Field(default=2, alias="ENGRAM_RECALL_HOPS")
+    recall_fanout: int = Field(default=10, alias="ENGRAM_RECALL_FANOUT")
+    recall_default_budget: int = Field(default=800, alias="ENGRAM_RECALL_DEFAULT_BUDGET")
+
     def model_for(self, role: str) -> str:
         try:
             return {
