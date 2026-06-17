@@ -11,6 +11,8 @@ from typing import Any, Protocol, runtime_checkable
 
 from engram.core.models import (
     Completion,
+    Edge,
+    Evidence,
     GraphView,
     LearningEvent,
     Message,
@@ -38,12 +40,22 @@ class EmbedderPort(Protocol):
 class StoragePort(Protocol):
     async def health(self) -> bool: ...
 
-    # The remainder is the surface Phases 1–2 implement. Declared here so
-    # adapters and fakes know what's coming and signatures stay stable.
+    # writes
     async def insert_event(self, e: LearningEvent) -> str: ...
+    async def insert_events(self, events: list[LearningEvent]) -> list[str]: ...
+    async def insert_node(self, n: Node) -> str: ...
+    async def insert_edge(self, e: Edge) -> str: ...
+    async def insert_evidence(self, ev: Evidence) -> str: ...
+
+    # reads
     async def vector_search(
         self, learner_id: str, query_vec: list[float], k: int
     ) -> list[Node]: ...
+    async def get_edges(self, learner_id: str, node_ids: list[str]) -> list[Edge]: ...
+    async def get_nodes(self, learner_id: str, node_ids: list[str]) -> list[Node]: ...
+    async def top_evidence(
+        self, node_ids: list[str], per_node: int
+    ) -> dict[str, list[Evidence]]: ...
 
 
 @runtime_checkable

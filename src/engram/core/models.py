@@ -42,6 +42,7 @@ class LearningEvent:
     refs: dict[str, Any] = field(default_factory=dict)
     signals: dict[str, Any] = field(default_factory=dict)
     ts: datetime = field(default_factory=_now)
+    consolidated_at: datetime | None = None
 
 
 @dataclass(slots=True)
