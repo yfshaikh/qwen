@@ -19,11 +19,21 @@ from engram.core.models import GraphView, LearningEvent, RecallResult
 
 
 class Engram:
-    def __init__(self, storage: Any, llm: Any, embedder: Any, settings: Any = None) -> None:
+    def __init__(
+        self,
+        storage: Any,
+        llm: Any,
+        embedder: Any,
+        settings: Any = None,
+        token_count: Any = None,
+    ) -> None:
+        from engram.core.tokens import heuristic_token_count
+
         self.storage = storage
         self.llm = llm
         self.embedder = embedder
         self.settings = settings
+        self._token_count = token_count or heuristic_token_count
 
     # --- construction & lifecycle ---------------------------------------
 
@@ -63,10 +73,32 @@ class Engram:
     # --- memory verbs (Phase 1–2 bodies) --------------------------------
 
     async def ingest(self, events: list[LearningEvent]) -> None:
-        raise NotImplementedError("Phase 1")
+        for e in events:
+            if not e.learner_id or not e.type:
+                raise ValueError("LearningEvent requires non-empty learner_id and type")
+        await self.storage.insert_events(events)
 
-    async def recall(self, learner_id: str, query: str, budget: int) -> RecallResult:
-        raise NotImplementedError("Phase 1")
+    async def recall(
+        self, learner_id: str, query: str, budget: int | None = None
+    ) -> RecallResult:
+        from engram.core.recall import Recall, RecallWeights
+
+        s = self.settings
+        if s is not None:
+            weights = RecallWeights(
+                s.recall_w_recency, s.recall_w_importance, s.recall_w_relevance
+            )
+            recall = Recall(
+                self.storage, self.embedder, self._token_count, weights,
+                seed_k=s.recall_seed_k, hops=s.recall_hops, fanout=s.recall_fanout,
+            )
+            budget = budget if budget is not None else s.recall_default_budget
+        else:
+            recall = Recall(
+                self.storage, self.embedder, self._token_count, RecallWeights()
+            )
+            budget = budget if budget is not None else 800
+        return await recall.run(learner_id, query, budget)
 
     async def consolidate(self, learner_id: str) -> None:
         raise NotImplementedError("Phase 2")

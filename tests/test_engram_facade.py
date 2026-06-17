@@ -14,16 +14,48 @@ async def test_health_delegates_to_storage():
     assert await _engram(healthy=False).health() is False
 
 
-async def test_memory_verbs_are_phase1_stubs():
+async def test_remaining_verbs_are_later_phase_stubs():
     eng = _engram()
-    with pytest.raises(NotImplementedError):
-        await eng.ingest([LearningEvent(learner_id="a", type="utterance")])
-    with pytest.raises(NotImplementedError):
-        await eng.recall("a", "topic", 800)
     with pytest.raises(NotImplementedError):
         await eng.consolidate("a")
     with pytest.raises(NotImplementedError):
         await eng.graph("a")
+
+
+async def test_ingest_appends_events():
+    eng = _engram()
+    await eng.ingest(
+        [
+            LearningEvent(learner_id="a", type="utterance", text="hi"),
+            LearningEvent(learner_id="a", type="note", text="n"),
+        ]
+    )
+    assert len(eng.storage.events) == 2
+
+
+async def test_ingest_rejects_malformed_event_before_writing():
+    eng = _engram()
+    with pytest.raises(ValueError):
+        await eng.ingest([LearningEvent(learner_id="", type="utterance")])
+    assert eng.storage.events == []  # all-or-nothing
+
+
+async def test_add_alias_ingests():
+    eng = _engram()
+    await eng.add([LearningEvent(learner_id="a", type="note", text="n")])
+    assert len(eng.storage.events) == 1
+
+
+async def test_recall_against_seeded_graph():
+    from pathlib import Path
+
+    from engram.adapters.seed import seed_graph
+
+    eng = _engram()
+    fixture = Path(__file__).parent / "fixtures" / "seed_basic.yaml"
+    await seed_graph(eng.storage, eng.embedder, fixture)
+    res = await eng.recall("alice", "limits", budget=800)
+    assert "Limits" in res.text_block
 
 
 async def test_mem0_aliases_point_at_canonical_verbs():
