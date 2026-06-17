@@ -1,4 +1,9 @@
-"""The agnostic surface. Protocols only — no third-party imports, no bodies."""
+"""The agnostic surface. Protocols only — no third-party imports, no bodies.
+
+LLMPort and EmbedderPort are deliberately separate: the chat provider
+(OpenRouter) and the embeddings provider (OpenAI) are different services in this
+build. Splitting them lets each be swapped independently (e.g. DashScope later).
+"""
 
 from __future__ import annotations
 
@@ -23,6 +28,9 @@ class LLMPort(Protocol):
         schema: dict[str, Any] | None = None,
     ) -> Completion: ...
 
+
+@runtime_checkable
+class EmbedderPort(Protocol):
     async def embed(self, texts: list[str]) -> list[list[float]]: ...
 
 

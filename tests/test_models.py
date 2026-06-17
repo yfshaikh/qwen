@@ -1,6 +1,7 @@
 from datetime import datetime, timezone
 
 from engram.core.models import (
+    Completion,
     Edge,
     EdgeType,
     Evidence,
@@ -14,52 +15,40 @@ from engram.core.models import (
 )
 
 
-def test_learning_event_round_trip():
-    e = LearningEvent(
-        learner_id="alice",
-        type="utterance",
-        text="I don't get derivatives",
-        refs={"doc_id": "calc-101", "page": 7},
-        signals={"confusion": 0.8},
-    )
-    assert e.learner_id == "alice"
-    assert e.refs["page"] == 7
-    assert e.signals["confusion"] == 0.8
-    assert isinstance(e.ts, datetime)
-    assert e.ts.tzinfo is not None  # always tz-aware
+def test_enums_have_expected_values():
+    assert NodeType.CONCEPT.value == "concept"
+    assert EdgeType.PREREQUISITE.value == "prerequisite"
+    assert EvidenceKind.QUIZ_WRONG.value == "quiz_wrong"
 
 
-def test_node_defaults_and_types():
-    n = Node(learner_id="alice", type=NodeType.CONCEPT, label="derivatives")
-    assert n.type is NodeType.CONCEPT
-    assert n.mastery is None
-    assert n.embedding is None
+def test_learning_event_defaults():
+    e = LearningEvent(learner_id="alice", type="utterance", text="what is a limit?")
+    assert e.refs == {}
+    assert e.signals == {}
+    assert e.ts.tzinfo == timezone.utc
+
+
+def test_node_minimal_construction():
+    n = Node(learner_id="alice", type=NodeType.CONCEPT, label="limits")
+    assert n.id is None
     assert n.source_refs == []
-    assert n.forgotten_at is None
+    assert isinstance(n.created_at, datetime)
 
 
-def test_edge_validates_type():
-    edge = Edge(
-        learner_id="alice",
-        source_id="a",
-        target_id="b",
-        type=EdgeType.PREREQUISITE,
-    )
-    assert edge.type is EdgeType.PREREQUISITE
-
-
-def test_evidence_kind_literal():
-    ev = Evidence(node_id="n1", kind=EvidenceKind.QUIZ_WRONG, content="missed Q3")
-    assert ev.kind is EvidenceKind.QUIZ_WRONG
-
-
-def test_recall_and_graph_view_shapes():
-    rv = RecallResult(text_block="...", subgraph={"nodes": [], "edges": []})
-    assert rv.text_block == "..."
+def test_edge_and_evidence_and_views():
+    edge = Edge(learner_id="alice", source_id="a", target_id="b", type=EdgeType.RELATES_TO)
+    assert edge.weight == 1.0
+    ev = Evidence(node_id="n1", kind=EvidenceKind.STRUGGLE)
+    assert ev.importance is None
+    rr = RecallResult(text_block="ctx", subgraph={"nodes": [], "edges": []})
+    assert rr.text_block == "ctx"
     gv = GraphView(nodes=[], edges=[])
-    assert gv.nodes == [] and gv.edges == []
+    assert gv.nodes == []
 
 
-def test_message_shape():
+def test_message_and_completion():
     m = Message(role="user", content="hi")
-    assert m.role == "user" and m.content == "hi"
+    assert m.role == "user"
+    c = Completion(text="hello", usage={"total_tokens": 3}, model="fake")
+    assert c.json is None
+    assert c.usage["total_tokens"] == 3

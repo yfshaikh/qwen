@@ -8,15 +8,9 @@ from engram.core.models import Completion, LearningEvent, Message, Node
 
 
 class FakeLLM:
-    def __init__(
-        self,
-        canned_text: str = "ok",
-        canned_embedding: list[float] | None = None,
-    ) -> None:
+    def __init__(self, canned_text: str = "ok") -> None:
         self.canned_text = canned_text
-        self.canned_embedding = canned_embedding or [0.0] * 1024
         self.complete_calls: list[tuple[str, list[Message], dict | None]] = []
-        self.embed_calls: list[list[str]] = []
 
     async def complete(
         self,
@@ -25,11 +19,20 @@ class FakeLLM:
         schema: dict[str, Any] | None = None,
     ) -> Completion:
         self.complete_calls.append((role, messages, schema))
-        return Completion(text=self.canned_text, usage={"role": role}, model=f"fake-{role}")
+        return Completion(
+            text=self.canned_text, usage={"role": role}, model=f"fake-{role}"
+        )
+
+
+class FakeEmbedder:
+    def __init__(self, dim: int = 1024) -> None:
+        self.dim = dim
+        self.embed_calls: list[list[str]] = []
 
     async def embed(self, texts: list[str]) -> list[list[float]]:
         self.embed_calls.append(texts)
-        return [list(self.canned_embedding) for _ in texts]
+        # Deterministic, text-derived vector so tests are stable.
+        return [[float(len(t) % 7)] * self.dim for t in texts]
 
 
 class FakeStorage:

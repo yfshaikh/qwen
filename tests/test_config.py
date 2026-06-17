@@ -2,36 +2,48 @@ import pytest
 
 from engram.app.config import Settings
 
-
-def test_settings_load_from_env(monkeypatch):
-    monkeypatch.setenv("DASHSCOPE_API_KEY", "sk-test")
-    monkeypatch.setenv("DASHSCOPE_BASE_URL", "https://example/v1")
-    monkeypatch.setenv("DATABASE_URL", "postgresql://x")
-    monkeypatch.setenv("ENGRAM_MODEL_TUTOR", "tutor-x")
-    monkeypatch.setenv("ENGRAM_MODEL_EXTRACTOR", "extractor-x")
-    monkeypatch.setenv("ENGRAM_MODEL_REFLECTOR", "reflector-x")
-    monkeypatch.setenv("ENGRAM_MODEL_EMBEDDER", "embedder-x")
-    monkeypatch.setenv("ENGRAM_EMBEDDING_DIM", "1024")
-
-    s = Settings()
-    assert s.dashscope_api_key == "sk-test"
-    assert s.dashscope_base_url == "https://example/v1"
-    assert s.database_url == "postgresql://x"
-    assert s.embedding_dim == 1024
-    assert s.model_for("tutor") == "tutor-x"
-    assert s.model_for("extractor") == "extractor-x"
-    assert s.model_for("reflector") == "reflector-x"
-    assert s.model_for("embedder") == "embedder-x"
+BASE_ENV = {
+    "OPENROUTER_API_KEY": "sk-or-test",
+    "OPENROUTER_BASE_URL": "https://openrouter.ai/api/v1",
+    "OPENAI_API_KEY": "sk-test",
+    "OPENAI_BASE_URL": "https://api.openai.com/v1",
+    "DATABASE_URL": "postgresql://engram:engram@localhost:5432/engram",
+    "ENGRAM_MODEL_TUTOR": "qwen/qwen3-vl-235b-a22b-instruct",
+    "ENGRAM_MODEL_EXTRACTOR": "qwen/qwen-turbo",
+    "ENGRAM_MODEL_REFLECTOR": "qwen/qwen-max",
+    "ENGRAM_MODEL_EMBEDDER": "text-embedding-3-small",
+}
 
 
-def test_model_for_unknown_role(monkeypatch):
-    monkeypatch.setenv("DASHSCOPE_API_KEY", "x")
-    monkeypatch.setenv("DASHSCOPE_BASE_URL", "x")
-    monkeypatch.setenv("DATABASE_URL", "x")
-    monkeypatch.setenv("ENGRAM_MODEL_TUTOR", "t")
-    monkeypatch.setenv("ENGRAM_MODEL_EXTRACTOR", "e")
-    monkeypatch.setenv("ENGRAM_MODEL_REFLECTOR", "r")
-    monkeypatch.setenv("ENGRAM_MODEL_EMBEDDER", "em")
-    s = Settings()
+def _settings(monkeypatch, **overrides):
+    env = {**BASE_ENV, **overrides}
+    for k, v in env.items():
+        monkeypatch.setenv(k, v)
+    # _env_file=None ensures the test ignores any real .env on disk.
+    return Settings(_env_file=None)
+
+
+def test_loads_from_env(monkeypatch):
+    s = _settings(monkeypatch)
+    assert s.openrouter_api_key == "sk-or-test"
+    assert s.database_url.endswith("/engram")
+    assert s.embedding_dim == 1024  # default
+
+
+def test_model_for_resolves_roles(monkeypatch):
+    s = _settings(monkeypatch)
+    assert s.model_for("tutor") == "qwen/qwen3-vl-235b-a22b-instruct"
+    assert s.model_for("extractor") == "qwen/qwen-turbo"
+    assert s.model_for("reflector") == "qwen/qwen-max"
+    assert s.model_for("embedder") == "text-embedding-3-small"
+
+
+def test_model_for_unknown_role_raises(monkeypatch):
+    s = _settings(monkeypatch)
     with pytest.raises(KeyError):
-        s.model_for("nonsense")
+        s.model_for("nope")
+
+
+def test_embedding_dim_override(monkeypatch):
+    s = _settings(monkeypatch, ENGRAM_EMBEDDING_DIM="512")
+    assert s.embedding_dim == 512

@@ -1,8 +1,8 @@
-"""DashScope LLMPort adapter — the file the submission's "uses Alibaba APIs"
-link points at. Wraps the OpenAI SDK aimed at DashScope's OpenAI-compatible
-endpoint (https://dashscope-intl.aliyuncs.com/compatible-mode/v1).
+"""OpenAI-compatible chat adapter (implements core.ports.LLMPort).
 
-All Alibaba Cloud / Qwen calls in Engram flow through here.
+Phase-0/MVP: pointed at OpenRouter (running Qwen models). The same class, given
+a client built against DashScope's OpenAI-compatible endpoint, is the Alibaba
+adapter later — see build_llm() and the spec's provider-seam section.
 """
 
 from __future__ import annotations
@@ -13,19 +13,14 @@ from typing import Any, Protocol
 from engram.core.models import Completion, Message
 
 
-class _AsyncOpenAILike(Protocol):
+class _AsyncChatClient(Protocol):
     chat: Any
-    embeddings: Any
 
 
-class DashScopeLLM:
-    """Implements core.ports.LLMPort against DashScope's OpenAI-compatible API."""
+class OpenAICompatibleLLM:
+    """Implements core.ports.LLMPort against any OpenAI-compatible chat API."""
 
-    def __init__(
-        self,
-        client: _AsyncOpenAILike,
-        role_to_model: dict[str, str],
-    ) -> None:
+    def __init__(self, client: _AsyncChatClient, role_to_model: dict[str, str]) -> None:
         self._client = client
         self._role_to_model = role_to_model
 
@@ -41,19 +36,14 @@ class DashScopeLLM:
             "messages": [asdict(m) for m in messages],
         }
         if schema is not None:
-            # DashScope's OpenAI-compatible endpoint accepts json_object;
-            # the prompt itself must describe the schema for the model.
+            # OpenAI-compatible json_object mode; the prompt itself must describe
+            # the schema for the model. (Structured parsing lands in Phase 2.)
             kwargs["response_format"] = {"type": "json_object"}
 
         resp = await self._client.chat.completions.create(**kwargs)
         text = resp.choices[0].message.content if resp.choices else None
         usage = self._usage_dict(getattr(resp, "usage", None))
         return Completion(text=text, usage=usage, model=getattr(resp, "model", model))
-
-    async def embed(self, texts: list[str]) -> list[list[float]]:
-        model = self._resolve("embedder")
-        resp = await self._client.embeddings.create(model=model, input=texts)
-        return [item.embedding for item in resp.data]
 
     def _resolve(self, role: str) -> str:
         try:
@@ -65,7 +55,6 @@ class DashScopeLLM:
     def _usage_dict(usage: Any) -> dict[str, Any]:
         if usage is None:
             return {}
-        # Works for both the SDK's pydantic model and our test fake.
         for attr in ("model_dump", "dict"):
             fn = getattr(usage, attr, None)
             if callable(fn):
@@ -77,18 +66,17 @@ class DashScopeLLM:
         }
 
 
-def build_dashscope_llm(settings: Any) -> DashScopeLLM:
-    """Composition helper: build a DashScopeLLM from a Settings instance."""
+def build_llm(settings: Any) -> OpenAICompatibleLLM:
+    """Composition helper: build the chat LLM (OpenRouter) from Settings."""
     from openai import AsyncOpenAI
 
     client = AsyncOpenAI(
-        api_key=settings.dashscope_api_key,
-        base_url=settings.dashscope_base_url,
+        api_key=settings.openrouter_api_key,
+        base_url=settings.openrouter_base_url,
     )
     role_to_model = {
         "tutor": settings.model_for("tutor"),
         "extractor": settings.model_for("extractor"),
         "reflector": settings.model_for("reflector"),
-        "embedder": settings.model_for("embedder"),
     }
-    return DashScopeLLM(client=client, role_to_model=role_to_model)
+    return OpenAICompatibleLLM(client=client, role_to_model=role_to_model)

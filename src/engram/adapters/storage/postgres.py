@@ -13,7 +13,7 @@ class PostgresStorage:
         self._pool: asyncpg.Pool | None = None
 
     async def connect(self) -> None:
-        # Small pool — we're hello-world. Phase 1+ will tune.
+        # Small pool — Phase 0. Phases 1+ will tune sizing.
         self._pool = await asyncpg.create_pool(self._dsn, min_size=1, max_size=4)
 
     async def close(self) -> None:
@@ -26,7 +26,6 @@ class PostgresStorage:
             return False
         try:
             async with self._pool.acquire() as conn:
-                # Cheap reachability probe + assert the schema is present.
                 val = await conn.fetchval("SELECT 1")
                 if val != 1:
                     return False

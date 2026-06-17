@@ -1,5 +1,9 @@
--- Phase 0 schema. Full DDL from the spec; no logic uses tables other than the
--- existence check in StoragePort.health() yet.
+-- Phase 0 schema. Full DDL from the spec. Only health()'s existence check uses
+-- these tables in Phase 0; Phases 1–2 add the real reads/writes.
+--
+-- Embedding dim: vector(1024) is the single source of truth for the embedding
+-- dimension and MUST match ENGRAM_EMBEDDING_DIM in .env. Changing the dimension
+-- means editing both. (Templated DDL is deliberately out of scope for Phase 0.)
 
 CREATE EXTENSION IF NOT EXISTS vector;
 CREATE EXTENSION IF NOT EXISTS pgcrypto;  -- for gen_random_uuid()

@@ -1,4 +1,8 @@
-"""env-loaded settings. The role->model map is the #1 cost lever (spec §2)."""
+"""env-loaded settings. The role->model map is the #1 cost lever (spec §2).
+
+Chat (tutor/extractor/reflector) goes through OpenRouter; embeddings go through
+OpenAI. Two providers, two keys, two base URLs.
+"""
 
 from __future__ import annotations
 
@@ -16,9 +20,15 @@ class Settings(BaseSettings):
         protected_namespaces=(),
     )
 
-    # Required
-    dashscope_api_key: str
-    dashscope_base_url: str
+    # Chat provider (OpenRouter)
+    openrouter_api_key: str
+    openrouter_base_url: str = "https://openrouter.ai/api/v1"
+
+    # Embeddings provider (OpenAI)
+    openai_api_key: str
+    openai_base_url: str = "https://api.openai.com/v1"
+
+    # Database
     database_url: str
 
     # Role -> model

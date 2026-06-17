@@ -24,3 +24,5 @@ __pycache__/
 .env.development.local
 .env.test.local
 
+docs/superpowers
+
