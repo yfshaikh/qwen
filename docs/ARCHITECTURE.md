@@ -272,7 +272,42 @@ report = await eng.consolidate(learner_id="alice")   # Phase 2
 
 ---
 
-## 9. Deployment & the Alibaba switch (future)
+## 9. Host/tutor boundary — tools live in the tutor, not in Engram
+
+A strict line the whole design rests on: **Engram is memory, not the agent that
+acts.** Tools (view the page, read its HTML, point at an element, render a slide),
+perception, STT/TTS, and UI are **host/tutor** concerns. Engram never knows what a
+"page" or "PDF" is — it only stores events and serves recalled context. This is
+what keeps the memory core droppable into *any* host.
+
+**Decision (2026-06-17):** the tutor ships as a **separate package** depending on
+`engram`, with its own **tool plugin interface** (register tools like
+`view_page` / `read_html` / `point`). `engram` stays pure memory.
+
+```mermaid
+flowchart LR
+    subgraph tutorpkg["tutor host package (separate; Phase 3+)"]
+        Tools["tools: view_page / read_html / point"]
+        Agent["tutor agent (the LLM turn)"]
+        Tools --> Agent
+    end
+    subgraph engrampkg["engram package (memory core)"]
+        API["recall / ingest / consolidate"]
+    end
+    Agent -- "recall(learner, query)" --> API
+    API -- "memory context" --> Agent
+    Agent -- "emit LearningEvent[]" --> API
+```
+
+Flow: *a tool perceives → the tutor reasons (with Engram's recalled memory in its
+prompt) → the tutor emits events → Engram remembers.* Tools feed the tutor; the
+tutor feeds Engram. Adding a new perception tool is a tutor change, never an
+Engram change. (clicky, if used as a host, plugs in exactly here — via the HTTP
+service since its backend is a non-Python Cloudflare Worker.)
+
+---
+
+## 10. Deployment & the Alibaba switch (future)
 
 Backend (FastAPI + Keeper cron) targets Alibaba ECS/SAE; DB → Alibaba
 RDS/PolarDB (pgvector); inference → DashScope. All built-for via the provider seam
