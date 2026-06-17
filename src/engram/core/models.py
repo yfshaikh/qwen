@@ -43,6 +43,7 @@ class LearningEvent:
     signals: dict[str, Any] = field(default_factory=dict)
     ts: datetime = field(default_factory=_now)
     consolidated_at: datetime | None = None
+    id: str | None = None
 
 
 @dataclass(slots=True)

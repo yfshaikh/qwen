@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import math
+from contextlib import asynccontextmanager
+from datetime import datetime, timezone
 from typing import Any
 
 from engram.core.models import (
@@ -61,6 +63,9 @@ class FakeStorage:
         self.nodes: dict[str, Node] = {}
         self.edges: list[Edge] = []
         self.evidence: list[Evidence] = []
+        self.mastery_history: list = []
+        self.audit: list = []
+        self._locked: set[str] = set()
         self._seq = 0
 
     def _next_id(self) -> str:
@@ -71,8 +76,9 @@ class FakeStorage:
         return self.healthy
 
     async def insert_event(self, e: LearningEvent) -> str:
+        e.id = e.id or self._next_id()
         self.events.append(e)  # consolidated_at defaults to None on the dataclass
-        return self._next_id()
+        return e.id
 
     async def insert_events(self, events: list[LearningEvent]) -> list[str]:
         return [await self.insert_event(e) for e in events]
@@ -130,3 +136,66 @@ class FakeStorage:
             evs.sort(key=lambda e: (e.importance or 0.0), reverse=True)
             out[nid] = evs[:per_node]
         return out
+
+    async def get_pending_events(self, learner_id: str) -> list[LearningEvent]:
+        return [
+            e
+            for e in self.events
+            if e.learner_id == learner_id and e.consolidated_at is None
+        ]
+
+    async def get_live_nodes(self, learner_id: str) -> list[Node]:
+        return [
+            n
+            for n in self.nodes.values()
+            if n.learner_id == learner_id and n.forgotten_at is None
+        ]
+
+    @asynccontextmanager
+    async def consolidation_lock(self, learner_id: str):
+        if learner_id in self._locked:
+            yield False
+            return
+        self._locked.add(learner_id)
+        try:
+            yield True
+        finally:
+            self._locked.discard(learner_id)
+
+    async def apply_consolidation(self, plan) -> None:
+        idmap: dict[str, str] = {}
+        for n in plan.new_nodes:
+            temp = n.id
+            n.id = self._next_id()
+            idmap[temp] = n.id
+            self.nodes[n.id] = n
+
+        def rid(x: str) -> str:
+            return idmap.get(x, x)
+
+        for e in plan.new_edges:
+            e.id = e.id or self._next_id()
+            e.source_id = rid(e.source_id)
+            e.target_id = rid(e.target_id)
+            self.edges.append(e)
+        for ev in plan.new_evidence:
+            ev.id = ev.id or self._next_id()
+            ev.node_id = rid(ev.node_id)
+            self.evidence.append(ev)
+        for upd in plan.node_updates:
+            existing = self.nodes.get(upd.id)
+            if existing is not None:
+                existing.mastery = upd.mastery
+                existing.confidence = upd.confidence
+                existing.salience = upd.salience
+                existing.last_seen_at = upd.last_seen_at
+                existing.forgotten_at = upd.forgotten_at
+        for mp in plan.mastery_history:
+            self.mastery_history.append((rid(mp.node_id), mp.mastery, mp.confidence))
+        self.audit.extend(plan.audit)
+        if plan.processed_event_ids:
+            stamp = datetime.now(timezone.utc)
+            ids = set(plan.processed_event_ids)
+            for e in self.events:
+                if e.id in ids:
+                    e.consolidated_at = stamp

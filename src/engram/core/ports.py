@@ -7,8 +7,10 @@ build. Splitting them lets each be swapped independently (e.g. DashScope later).
 
 from __future__ import annotations
 
+from contextlib import AbstractAsyncContextManager
 from typing import Any, Protocol, runtime_checkable
 
+from engram.core.consolidation import ConsolidationPlan
 from engram.core.models import (
     Completion,
     Edge,
@@ -56,6 +58,14 @@ class StoragePort(Protocol):
     async def top_evidence(
         self, node_ids: list[str], per_node: int
     ) -> dict[str, list[Evidence]]: ...
+
+    # consolidation (Phase 2)
+    async def get_pending_events(self, learner_id: str) -> list[LearningEvent]: ...
+    async def get_live_nodes(self, learner_id: str) -> list[Node]: ...
+    def consolidation_lock(
+        self, learner_id: str
+    ) -> AbstractAsyncContextManager[bool]: ...
+    async def apply_consolidation(self, plan: ConsolidationPlan) -> None: ...
 
 
 @runtime_checkable

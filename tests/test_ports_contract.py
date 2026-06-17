@@ -94,3 +94,48 @@ async def test_fake_vector_search_excludes_forgotten():
     )
     seeds = await fs.vector_search("a", [1.0, 0.0], k=5)
     assert [n.label for n in seeds] == ["Here"]
+
+
+async def test_fake_get_pending_events_and_ids():
+    from engram.core.models import LearningEvent
+
+    fs = FakeStorage()
+    await fs.insert_events(
+        [LearningEvent(learner_id="a", type="utterance", text="hi")]
+    )
+    pending = await fs.get_pending_events("a")
+    assert len(pending) == 1 and pending[0].id is not None
+
+
+async def test_fake_consolidation_lock_blocks_second_acquire():
+    fs = FakeStorage()
+    async with fs.consolidation_lock("a") as first:
+        assert first is True
+        async with fs.consolidation_lock("a") as second:
+            assert second is False
+    async with fs.consolidation_lock("a") as again:
+        assert again is True
+
+
+async def test_fake_apply_consolidation_remaps_temp_ids_and_watermarks():
+    from engram.core.consolidation import ConsolidationPlan
+    from engram.core.models import Evidence, EvidenceKind, LearningEvent, Node, NodeType
+
+    fs = FakeStorage()
+    ids = await fs.insert_events([LearningEvent(learner_id="a", type="note", text="n")])
+
+    new_node = Node(id="tmp-0", learner_id="a", type=NodeType.CONCEPT, label="X",
+                    salience=1.0, embedding=[1.0, 0.0])
+    plan = ConsolidationPlan(
+        learner_id="a",
+        new_nodes=[new_node],
+        new_evidence=[Evidence(node_id="tmp-0", kind=EvidenceKind.NOTE, content="c")],
+        processed_event_ids=ids,
+    )
+    await fs.apply_consolidation(plan)
+
+    assert len(fs.nodes) == 1
+    real_id = next(iter(fs.nodes))
+    assert real_id != "tmp-0"  # remapped
+    assert fs.evidence[0].node_id == real_id
+    assert (await fs.get_pending_events("a")) == []  # watermarked
