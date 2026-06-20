@@ -140,3 +140,14 @@ def test_from_env_wires_real_adapters(monkeypatch):
     assert isinstance(eng.storage, PostgresStorage)
     assert isinstance(eng.llm, OpenAICompatibleLLM)
     assert isinstance(eng.embedder, OpenAIEmbedder)
+
+
+async def test_engram_audit_delegates_to_storage():
+    from engram.core.consolidation import AuditEntry, ConsolidationPlan
+
+    eng = _engram()
+    await eng.storage.apply_consolidation(
+        ConsolidationPlan(learner_id="a", audit=[AuditEntry(op="consolidate")])
+    )
+    rows = await eng.audit("a")
+    assert rows[0]["op"] == "consolidate"

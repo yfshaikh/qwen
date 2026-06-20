@@ -85,3 +85,12 @@ def test_keeper_overrides(monkeypatch):
     s = _settings(monkeypatch, ENGRAM_KEEPER_TAU_HIGH="0.9", ENGRAM_KEEPER_PRUNE_FLOOR="0.1")
     assert s.keeper_tau_high == 0.9
     assert s.keeper_prune_floor == 0.1
+
+
+def test_audit_settings(monkeypatch):
+    s = _settings(monkeypatch)
+    assert s.audit_poll_seconds == 1.0
+    assert s.audit_page_limit == 100
+    s2 = _settings(monkeypatch, ENGRAM_AUDIT_POLL_SECONDS="0.5", ENGRAM_AUDIT_PAGE_LIMIT="50")
+    assert s2.audit_poll_seconds == 0.5
+    assert s2.audit_page_limit == 50

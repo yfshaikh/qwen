@@ -56,6 +56,10 @@ class Settings(BaseSettings):
     keeper_salience_bump: float = Field(default=0.3, alias="ENGRAM_KEEPER_SALIENCE_BUMP")
     keeper_prune_floor: float = Field(default=0.05, alias="ENGRAM_KEEPER_PRUNE_FLOOR")
 
+    # Audit read / SSE tail (Phase 3a)
+    audit_poll_seconds: float = Field(default=1.0, alias="ENGRAM_AUDIT_POLL_SECONDS")
+    audit_page_limit: int = Field(default=100, alias="ENGRAM_AUDIT_PAGE_LIMIT")
+
     def model_for(self, role: str) -> str:
         try:
             return {

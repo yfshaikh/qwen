@@ -118,6 +118,9 @@ class Engram:
         keeper = Keeper(self.storage, self.llm, self.embedder, params)
         return await keeper.consolidate(learner_id)
 
+    async def audit(self, learner_id: str, since: Any = None, limit: int = 100) -> list[dict]:
+        return await self.storage.get_audit(learner_id, since, limit)
+
     async def graph(self, learner_id: str, focus: str | None = None) -> GraphView:
         raise NotImplementedError("Phase 1")
 

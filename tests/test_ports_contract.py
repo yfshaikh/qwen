@@ -139,3 +139,26 @@ async def test_fake_apply_consolidation_remaps_temp_ids_and_watermarks():
     assert real_id != "tmp-0"  # remapped
     assert fs.evidence[0].node_id == real_id
     assert (await fs.get_pending_events("a")) == []  # watermarked
+
+
+async def test_fake_get_audit_orders_filters_and_scopes():
+    from engram.core.consolidation import AuditEntry, ConsolidationPlan
+
+    fs = FakeStorage()
+    await fs.apply_consolidation(
+        ConsolidationPlan(learner_id="a", audit=[AuditEntry(op="extract"), AuditEntry(op="link")])
+    )
+    await fs.apply_consolidation(
+        ConsolidationPlan(learner_id="other", audit=[AuditEntry(op="consolidate")])
+    )
+
+    rows = await fs.get_audit("a")
+    assert [r["op"] for r in rows] == ["extract", "link"]
+    assert rows[0]["ts"] < rows[1]["ts"]
+    assert set(rows[0]) == {"id", "op", "rationale", "model", "tokens", "cost", "ts"}
+
+    after = await fs.get_audit("a", since=rows[0]["ts"])
+    assert [r["op"] for r in after] == ["link"]
+
+    assert len(await fs.get_audit("a", limit=1)) == 1
+    assert await fs.get_audit("nobody") == []

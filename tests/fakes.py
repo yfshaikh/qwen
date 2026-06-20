@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import math
 from contextlib import asynccontextmanager
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from engram.core.models import (
@@ -15,6 +15,9 @@ from engram.core.models import (
     Message,
     Node,
 )
+
+
+_AUDIT_BASE = datetime(2026, 1, 1, tzinfo=timezone.utc)
 
 
 def _cosine(a: list[float], b: list[float]) -> float:
@@ -65,6 +68,8 @@ class FakeStorage:
         self.evidence: list[Evidence] = []
         self.mastery_history: list = []
         self.audit: list = []
+        self._audit_rows: list[dict] = []
+        self._audit_seq = 0
         self._locked: set[str] = set()
         self._seq = 0
 
@@ -193,9 +198,33 @@ class FakeStorage:
         for mp in plan.mastery_history:
             self.mastery_history.append((rid(mp.node_id), mp.mastery, mp.confidence))
         self.audit.extend(plan.audit)
+        for a in plan.audit:
+            self._audit_seq += 1
+            self._audit_rows.append(
+                {
+                    "id": str(self._audit_seq),
+                    "learner_id": plan.learner_id,
+                    "op": a.op,
+                    "rationale": a.rationale,
+                    "model": a.model,
+                    "tokens": a.tokens,
+                    "cost": a.cost,
+                    "ts": _AUDIT_BASE + timedelta(microseconds=self._audit_seq),
+                }
+            )
         if plan.processed_event_ids:
             stamp = datetime.now(timezone.utc)
             ids = set(plan.processed_event_ids)
             for e in self.events:
                 if e.id in ids:
                     e.consolidated_at = stamp
+
+    async def get_audit(self, learner_id: str, since=None, limit: int = 100) -> list[dict]:
+        rows = [
+            r
+            for r in self._audit_rows
+            if r["learner_id"] == learner_id and (since is None or r["ts"] > since)
+        ]
+        rows.sort(key=lambda r: r["ts"])
+        keys = ("id", "op", "rationale", "model", "tokens", "cost", "ts")
+        return [{k: r[k] for k in keys} for r in rows[:limit]]

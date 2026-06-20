@@ -66,6 +66,9 @@ class StoragePort(Protocol):
         self, learner_id: str
     ) -> AbstractAsyncContextManager[bool]: ...
     async def apply_consolidation(self, plan: ConsolidationPlan) -> None: ...
+    async def get_audit(
+        self, learner_id: str, since: Any = None, limit: int = 100
+    ) -> list[dict]: ...
 
 
 @runtime_checkable
