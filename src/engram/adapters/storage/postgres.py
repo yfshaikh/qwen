@@ -62,7 +62,9 @@ def _row_to_node(row: asyncpg.Record) -> Node:
         mastery=row["mastery"],
         confidence=row["confidence"],
         salience=row["salience"],
-        embedding=list(emb) if emb is not None else None,
+        # pgvector yields numpy.float32 elements; coerce to plain float so the
+        # domain (and JSON serialization on the /recall path) sees list[float].
+        embedding=[float(x) for x in emb] if emb is not None else None,
         source_refs=row["source_refs"] if row["source_refs"] is not None else [],
         forgotten_at=row["forgotten_at"],
         created_at=row["created_at"],
