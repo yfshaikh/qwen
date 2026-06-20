@@ -11,7 +11,7 @@
 > |---|---|---|
 > | 0 | Foundations (core, ports, schema, adapters, facade) | ✅ |
 > | 1 | Ingest + Recall (read path) | ✅ |
-> | 2 | Memory Keeper (`consolidate`) | 🟡 designed |
+> | 2 | Memory Keeper (`consolidate`) | ✅ |
 > | 3 | Text tutor (`/chat`) | ⬜ |
 > | 4 | React console | ⬜ |
 > | 5 | Eval + polish | ⬜ |
@@ -201,7 +201,7 @@ fanout`) live in `Settings`, env-overridable so the eval harness can sweep them.
 
 ---
 
-## 7. Memory Keeper — `consolidate()` (Phase 2) 🟡
+## 7. Memory Keeper — `consolidate()` (Phase 2) ✅
 
 The core IP: turns pending events into graph. **Plan, then commit** — a *pure*
 planner produces a `ConsolidationPlan`; the only DB writes happen in one atomic
@@ -259,7 +259,7 @@ FastAPI app (Phase 3) re-exposes the same verbs over HTTP for non-Python hosts.
 |---|---|---|---|
 | `ingest(events)` | `add` | 1 ✅ | append `LearningEvent`s |
 | `recall(learner, query, budget)` | `search` | 1 ✅ | token-budgeted subgraph |
-| `consolidate(learner)` | — | 2 🟡 | run the Keeper |
+| `consolidate(learner)` | — | 2 ✅ | run the Keeper |
 | `graph(learner, focus?)` | — | 4 ⬜ | render-ready view |
 
 ```python
