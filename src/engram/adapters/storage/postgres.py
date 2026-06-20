@@ -351,3 +351,24 @@ class PostgresStorage:
                         " WHERE id = ANY($1::uuid[])",
                         plan.processed_event_ids,
                     )
+
+    async def get_audit(self, learner_id: str, since=None, limit: int = 100) -> list[dict]:
+        async with self._pool.acquire() as conn:
+            rows = await conn.fetch(
+                "SELECT id, op, rationale, model, tokens, cost, ts FROM engram_audit "
+                "WHERE learner_id = $1 AND ($2::timestamptz IS NULL OR ts > $2) "
+                "ORDER BY ts LIMIT $3",
+                learner_id, since, limit,
+            )
+            return [
+                {
+                    "id": str(r["id"]),
+                    "op": r["op"],
+                    "rationale": r["rationale"],
+                    "model": r["model"],
+                    "tokens": r["tokens"],
+                    "cost": float(r["cost"]) if r["cost"] is not None else None,
+                    "ts": r["ts"],
+                }
+                for r in rows
+            ]
