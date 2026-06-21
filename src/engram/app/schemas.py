@@ -69,3 +69,14 @@ class AuditResponse(BaseModel):
 class HealthResponse(BaseModel):
     status: str
     db: bool
+
+
+class ChatMessage(BaseModel):
+    role: str
+    content: str
+
+
+class ChatRequest(BaseModel):
+    learner_id: str = Field(min_length=1)
+    messages: list[ChatMessage] = Field(min_length=1)
+    budget: int | None = None

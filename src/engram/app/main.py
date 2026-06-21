@@ -17,6 +17,7 @@ from engram.app.schemas import (
     AddResponse,
     AuditResponse,
     AuditRow,
+    ChatRequest,
     ConsolidateRequest,
     HealthResponse,
     RecallRequest,
@@ -24,6 +25,7 @@ from engram.app.schemas import (
     ReportOut,
 )
 from engram.core.models import LearningEvent
+from engram.tutor.tutor import Tutor
 
 DEFAULT_POLL_SECONDS = 1.0
 HEARTBEAT_SECONDS = 15.0
@@ -114,5 +116,26 @@ async def events_stream(request: Request, learner_id: str,
                     yield ": ping\n\n"
                     idle = 0.0
             await asyncio.sleep(DEFAULT_POLL_SECONDS)
+
+    return StreamingResponse(gen(), media_type="text/event-stream")
+
+
+def _sse_event(event: str, data: dict) -> str:
+    return f"event: {event}\ndata: {json.dumps(data)}\n\n"
+
+
+@app.post("/chat")
+async def chat(req: ChatRequest, eng=Depends(get_engram)):
+    if req.messages[-1].role != "user":
+        raise HTTPException(status_code=400, detail="messages must end with a user turn")
+    tutor = Tutor(eng)
+    msgs = [m.model_dump() for m in req.messages]
+
+    async def gen():
+        try:
+            async for event, data in tutor.turn(req.learner_id, msgs, req.budget):
+                yield _sse_event(event, data)
+        except Exception as exc:  # failure after 200 already sent → in-band error frame
+            yield _sse_event("error", {"detail": str(exc)})
 
     return StreamingResponse(gen(), media_type="text/event-stream")
