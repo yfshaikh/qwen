@@ -75,3 +75,60 @@ async def test_complete_unknown_role_raises():
     llm = _make(rec)
     with pytest.raises(KeyError):
         await llm.complete("nope", [Message(role="user", content="q")])
+
+
+class _StreamDelta:
+    def __init__(self, content):
+        self.content = content
+
+
+class _StreamChoice:
+    def __init__(self, content):
+        self.delta = _StreamDelta(content)
+
+
+class _StreamChunk:
+    def __init__(self, content):
+        self.choices = [_StreamChoice(content)]
+
+
+class _StreamResponse:
+    def __init__(self, chunks):
+        self._chunks = chunks
+
+    def __aiter__(self):
+        return self._gen()
+
+    async def _gen(self):
+        for c in self._chunks:
+            yield _StreamChunk(c)
+
+
+class _StreamCompletions:
+    def __init__(self, rec):
+        self._rec = rec
+
+    async def create(self, **kwargs):
+        self._rec["kwargs"] = kwargs
+        return _StreamResponse(["A ", "limit ", None, "is..."])
+
+
+class _StreamChat:
+    def __init__(self, rec):
+        self.completions = _StreamCompletions(rec)
+
+
+class _StreamClient:
+    def __init__(self, rec):
+        self.chat = _StreamChat(rec)
+
+
+async def test_stream_yields_text_deltas_and_skips_empty():
+    rec = {}
+    llm = OpenAICompatibleLLM(
+        client=_StreamClient(rec), role_to_model={"tutor": "qwen/tutor-model"}
+    )
+    out = [d async for d in llm.stream("tutor", [Message(role="user", content="q")])]
+    assert out == ["A ", "limit ", "is..."]  # None delta skipped
+    assert rec["kwargs"]["stream"] is True
+    assert rec["kwargs"]["model"] == "qwen/tutor-model"

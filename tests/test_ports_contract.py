@@ -162,3 +162,12 @@ async def test_fake_get_audit_orders_filters_and_scopes():
 
     assert len(await fs.get_audit("a", limit=1)) == 1
     assert await fs.get_audit("nobody") == []
+
+
+async def test_fake_llm_stream_yields_canned_text_in_chunks():
+    from engram.core.models import Message
+
+    llm = FakeLLM(canned_text="hello world")
+    out = [d async for d in llm.stream("tutor", [Message(role="user", content="q")])]
+    assert "".join(out) == "hello world"
+    assert llm.stream_calls[0][0] == "tutor"

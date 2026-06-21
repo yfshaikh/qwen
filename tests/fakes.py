@@ -33,6 +33,7 @@ class FakeLLM:
     def __init__(self, canned_text: str = "ok") -> None:
         self.canned_text = canned_text
         self.complete_calls: list[tuple[str, list[Message], dict | None]] = []
+        self.stream_calls: list[tuple[str, list[Message]]] = []
 
     async def complete(
         self,
@@ -44,6 +45,14 @@ class FakeLLM:
         return Completion(
             text=self.canned_text, usage={"role": role}, model=f"fake-{role}"
         )
+
+    async def stream(self, role: str, messages: list[Message]):
+        self.stream_calls.append((role, messages))
+        text = self.canned_text
+        mid = len(text) // 2
+        for chunk in (text[:mid], text[mid:]):
+            if chunk:
+                yield chunk
 
 
 class FakeEmbedder:

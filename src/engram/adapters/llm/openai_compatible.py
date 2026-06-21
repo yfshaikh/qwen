@@ -7,6 +7,7 @@ adapter later — see build_llm() and the spec's provider-seam section.
 
 from __future__ import annotations
 
+from collections.abc import AsyncIterator
 from dataclasses import asdict
 from typing import Any, Protocol
 
@@ -44,6 +45,17 @@ class OpenAICompatibleLLM:
         text = resp.choices[0].message.content if resp.choices else None
         usage = self._usage_dict(getattr(resp, "usage", None))
         return Completion(text=text, usage=usage, model=getattr(resp, "model", model))
+
+    async def stream(self, role: str, messages: list[Message]) -> AsyncIterator[str]:
+        resp = await self._client.chat.completions.create(
+            model=self._resolve(role),
+            messages=[asdict(m) for m in messages],
+            stream=True,
+        )
+        async for chunk in resp:
+            delta = chunk.choices[0].delta.content if chunk.choices else None
+            if delta:
+                yield delta
 
     def _resolve(self, role: str) -> str:
         try:

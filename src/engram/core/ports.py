@@ -7,6 +7,7 @@ build. Splitting them lets each be swapped independently (e.g. DashScope later).
 
 from __future__ import annotations
 
+from collections.abc import AsyncIterator
 from contextlib import AbstractAsyncContextManager
 from typing import Any, Protocol, runtime_checkable
 
@@ -31,6 +32,8 @@ class LLMPort(Protocol):
         messages: list[Message],
         schema: dict[str, Any] | None = None,
     ) -> Completion: ...
+
+    def stream(self, role: str, messages: list[Message]) -> AsyncIterator[str]: ...
 
 
 @runtime_checkable
