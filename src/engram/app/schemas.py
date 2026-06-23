@@ -80,3 +80,33 @@ class ChatRequest(BaseModel):
     learner_id: str = Field(min_length=1)
     messages: list[ChatMessage] = Field(min_length=1)
     budget: int | None = None
+
+
+class GraphEvidence(BaseModel):
+    kind: str
+    content: str | None = None
+    importance: float | None = None
+
+
+class GraphNode(BaseModel):
+    id: str
+    label: str
+    type: str
+    summary: str | None = None
+    mastery: float | None = None
+    confidence: float | None = None
+    salience: float | None = None
+    evidence: list[GraphEvidence] = Field(default_factory=list)
+
+
+class GraphEdge(BaseModel):
+    id: str | None = None
+    source: str
+    target: str
+    type: str
+    weight: float
+
+
+class GraphResponse(BaseModel):
+    nodes: list[GraphNode]
+    edges: list[GraphEdge]

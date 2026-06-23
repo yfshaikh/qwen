@@ -19,6 +19,9 @@ from engram.app.schemas import (
     AuditRow,
     ChatRequest,
     ConsolidateRequest,
+    GraphEdge,
+    GraphNode,
+    GraphResponse,
     HealthResponse,
     RecallRequest,
     RecallResponse,
@@ -118,6 +121,15 @@ async def events_stream(request: Request, learner_id: str,
             await asyncio.sleep(DEFAULT_POLL_SECONDS)
 
     return StreamingResponse(gen(), media_type="text/event-stream")
+
+
+@app.get("/graph", response_model=GraphResponse)
+async def graph(learner_id: str, focus: str | None = None, eng=Depends(get_engram)):
+    gv = await eng.graph(learner_id, focus)
+    return GraphResponse(
+        nodes=[GraphNode(**n) for n in gv.nodes],
+        edges=[GraphEdge(**e) for e in gv.edges],
+    )
 
 
 def _sse_event(event: str, data: dict) -> str:
