@@ -43,6 +43,9 @@ async def test_full_http_path_live():
             assert rep.json()["nodes_created"] == 1
             aud = await c.get("/audit", params={"learner_id": learner})
             assert any(r["op"] == "consolidate" for r in aud.json()["rows"])
+            graph = await c.get("/graph", params={"learner_id": learner})
+            assert graph.status_code == 200
+            assert any(n["label"] == "Limits" for n in graph.json()["nodes"])
             rec = await c.post("/recall", json={"learner_id": learner, "query": "limits"})
             assert "Limits" in rec.json()["text_block"]
     finally:
