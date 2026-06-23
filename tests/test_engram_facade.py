@@ -14,10 +14,15 @@ async def test_health_delegates_to_storage():
     assert await _engram(healthy=False).health() is False
 
 
-async def test_remaining_verbs_are_later_phase_stubs():
+async def test_graph_delegates_and_returns_view():
+    from engram.core.models import Node, NodeType
+
     eng = _engram()
-    with pytest.raises(NotImplementedError):
-        await eng.graph("a")
+    await eng.storage.insert_node(
+        Node(learner_id="a", type=NodeType.CONCEPT, label="Limits", embedding=[1.0, 0.0])
+    )
+    gv = await eng.graph("a")
+    assert [n["label"] for n in gv.nodes] == ["Limits"]
 
 
 async def test_ingest_appends_events():

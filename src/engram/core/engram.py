@@ -122,7 +122,9 @@ class Engram:
         return await self.storage.get_audit(learner_id, since, limit)
 
     async def graph(self, learner_id: str, focus: str | None = None) -> GraphView:
-        raise NotImplementedError("Phase 1")
+        from engram.core.graph import build_graph
+
+        return await build_graph(self.storage, learner_id, focus)
 
     # --- mem0-style aliases ---------------------------------------------
     # add -> ingest, search -> recall. Aliased to the same functions so a mem0
