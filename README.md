@@ -18,6 +18,20 @@ docker compose up -d          # local pgvector on :5432
 pytest                        # run the suite
 ```
 
+## Try the tutor (live)
+
+After `cp .env.example .env` and adding your real OpenRouter + OpenAI keys
+(Docker Postgres up):
+
+```bash
+.venv/bin/python scripts/demo_chat.py
+```
+
+Boots the HTTP service and streams a `/chat` turn end-to-end — printing the
+recalled memory, the live reply, and the raw events saved — then consolidates
+and prints the audit log, so you can watch the Keeper turn the conversation into
+graph memory.
+
 ## License
 
 MIT — see `LICENSE`.
