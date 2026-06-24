@@ -42,6 +42,29 @@ def test_parse_skips_invalid_enums_but_keeps_valid():
     assert ex.relations == []  # bogus relation dropped
 
 
+def test_parse_coerces_non_numeric_importance_and_mastery():
+    # The live LLM sometimes returns qualitative words ("high"/"low") for the
+    # numeric importance/mastery fields. These must become float-or-None before
+    # they reach the float4 DB columns — never a raw string.
+    text = """
+    {"concepts": [{"label": "Limits", "summary": null,
+       "evidence": [
+         {"kind": "quiz_correct", "content": "a", "importance": "high"},
+         {"kind": "struggle", "content": "b", "importance": "0.7", "mastery": "low"},
+         {"kind": "demonstrated", "content": "c", "importance": 0.9, "mastery": 0.5}
+       ]}],
+     "preferences": [], "goals": [], "relations": []}
+    """
+    ev = parse_extraction(text).nodes[0].evidence
+    assert ev[0].importance is None  # "high" -> None, not the raw string
+    assert ev[1].importance == 0.7  # numeric string -> float
+    assert ev[1].mastery is None  # "low" -> None
+    assert ev[2].importance == 0.9 and ev[2].mastery == 0.5  # numbers kept
+    assert all(
+        e.importance is None or isinstance(e.importance, float) for e in ev
+    )
+
+
 def test_parse_malformed_raises():
     with pytest.raises(ExtractionError):
         parse_extraction("not json")

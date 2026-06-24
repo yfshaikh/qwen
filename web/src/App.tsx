@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
 import { ChatPanel } from './components/ChatPanel'
+import { Explainer } from './components/Explainer'
 import { GraphView } from './components/GraphView'
 import { KeeperTrace } from './components/KeeperTrace'
 import { NodeDetail } from './components/NodeDetail'
@@ -12,6 +13,7 @@ function newLearner(): string {
 }
 
 export default function App() {
+  const [view, setView] = useState<'explainer' | 'console'>('explainer')
   const [learner, setLearner] = useState(newLearner)
   const [turns, setTurns] = useState<PendingTurn[]>([])
   const [pending, setPending] = useState<PendingTurn | null>(null)
@@ -78,6 +80,10 @@ export default function App() {
     setTraceErr(undefined)
   }
 
+  if (view === 'explainer') {
+    return <Explainer onEnter={() => setView('console')} />
+  }
+
   return (
     <div className="flex h-screen flex-col bg-zinc-50 text-zinc-900">
       {banner && (
@@ -95,6 +101,12 @@ export default function App() {
         <span className="ml-auto rounded-md bg-zinc-100 px-2 py-1 text-xs text-zinc-500">
           learner <span className="font-mono text-zinc-700">{learner}</span>
         </span>
+        <button
+          onClick={() => setView('explainer')}
+          className="rounded-lg border border-zinc-200 px-2.5 py-1 text-xs font-medium text-zinc-600 transition hover:bg-zinc-50"
+        >
+          How it works
+        </button>
         <button
           onClick={reset}
           className="rounded-lg border border-zinc-200 px-2.5 py-1 text-xs font-medium text-zinc-600 transition hover:bg-zinc-50"

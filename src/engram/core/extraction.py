@@ -83,6 +83,26 @@ def build_extraction_messages(events) -> list[Message]:
     return [Message(role="system", content=_SYSTEM), Message(role="user", content=user)]
 
 
+def _as_float(v) -> float | None:
+    """Coerce an LLM-supplied numeric field to float, or None.
+
+    The model sometimes returns qualitative words ("high"/"low") or numeric
+    strings for importance/mastery; these must never reach the float4 columns as
+    raw strings. Numbers and numeric strings pass through; anything else (a word,
+    a bool, a dict) becomes None.
+    """
+    if isinstance(v, bool) or v is None:
+        return None
+    if isinstance(v, (int, float)):
+        return float(v)
+    if isinstance(v, str):
+        try:
+            return float(v)
+        except ValueError:
+            return None
+    return None
+
+
 def _evidence(raw: dict) -> ExtractedEvidence | None:
     kind = raw.get("kind")
     if kind not in _VALID_KINDS:
@@ -90,9 +110,9 @@ def _evidence(raw: dict) -> ExtractedEvidence | None:
     return ExtractedEvidence(
         kind=kind,
         content=raw.get("content"),
-        importance=raw.get("importance"),
+        importance=_as_float(raw.get("importance")),
         correct=raw.get("correct"),
-        mastery=raw.get("mastery"),
+        mastery=_as_float(raw.get("mastery")),
     )
 
 
