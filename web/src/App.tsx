@@ -59,7 +59,7 @@ export default function App() {
       setAudit(await api.getAudit(learner))
       const fresh = new Set(g.nodes.filter((n) => !before.has(n.id)).map((n) => n.id))
       setFlash(fresh)
-      setTimeout(() => setFlash(new Set()), 1500)
+      setTimeout(() => setFlash(new Set()), 1600)
     } catch (e) {
       setTraceErr(String(e))
     }
@@ -79,25 +79,47 @@ export default function App() {
   }
 
   return (
-    <div className="app">
-      {banner && <div className="banner">{banner}</div>}
-      <header className="topbar">
-        <strong>Engram Console</strong>
-        <span>
-          learner: <code>{learner}</code>
+    <div className="flex h-screen flex-col bg-zinc-50 text-zinc-900">
+      {banner && (
+        <div className="border-b border-amber-100 bg-amber-50 px-4 py-2 text-center text-sm text-amber-800">
+          {banner}
+        </div>
+      )}
+      <header className="flex items-center gap-3 border-b border-zinc-200 bg-white px-4 py-2.5">
+        <div className="flex items-center gap-2">
+          <span className="grid h-6 w-6 place-items-center rounded-md bg-indigo-600 text-xs font-bold text-white">
+            E
+          </span>
+          <span className="text-sm font-semibold text-zinc-900">Engram Console</span>
+        </div>
+        <span className="ml-auto rounded-md bg-zinc-100 px-2 py-1 text-xs text-zinc-500">
+          learner <span className="font-mono text-zinc-700">{learner}</span>
         </span>
-        <button onClick={reset}>New session</button>
+        <button
+          onClick={reset}
+          className="rounded-lg border border-zinc-200 px-2.5 py-1 text-xs font-medium text-zinc-600 transition hover:bg-zinc-50"
+        >
+          New session
+        </button>
       </header>
-      <main className="panes">
-        <section className="left">
-          <ChatPanel turns={turns} pending={pending} onSend={send} onConsolidate={doConsolidate} busy={busy} />
-        </section>
-        <section className="right">
+
+      <div className="flex min-h-0 flex-1">
+        <aside className="flex w-[380px] shrink-0 flex-col border-r border-zinc-200 bg-white">
+          <ChatPanel
+            turns={turns}
+            pending={pending}
+            onSend={send}
+            onConsolidate={doConsolidate}
+            busy={busy}
+          />
+        </aside>
+        <main className="relative min-w-0 flex-1 bg-zinc-50">
           <GraphView graph={graph} flashIds={flash} onSelect={setSelected} />
           <NodeDetail node={selected} onClose={() => setSelected(null)} />
-        </section>
-      </main>
-      <footer className="drawer">
+        </main>
+      </div>
+
+      <footer className="border-t border-zinc-200 bg-white">
         <KeeperTrace report={report} rows={audit} error={traceErr} />
       </footer>
     </div>

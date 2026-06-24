@@ -63,7 +63,7 @@ the `DATABASE_URL` above works out of the box.
 ### Run the service
 
 ```bash
-.venv/bin/uvicorn engram.app.main:app --port 8000
+.venv/bin/uvicorn engram.app.main:app --port 8050
 ```
 
 Routes: `GET /health`, `POST /add`, `POST /recall`, `POST /consolidate`,
@@ -82,13 +82,29 @@ npm install
 npm run dev                   # http://localhost:5173
 ```
 
-With the service running on `:8000`, open http://localhost:5173, send a message,
-then click **Consolidate**. The dev server proxies the API to `http://localhost:8000`
+With the service running on `:8050`, open http://localhost:5173, send a message,
+then click **Consolidate**. The dev server proxies the API to `http://localhost:8050`
 — point it elsewhere with `VITE_API_BASE`:
 
 ```bash
 VITE_API_BASE=http://localhost:8011 npm run dev
 ```
+
+### Example flows
+
+The empty console shows clickable starter flows — click a prompt to send it, run a
+few turns, then **Consolidate**. Or type your own:
+
+- **Calculus (limits → continuity):** "What is a limit in calculus? Keep it to two
+  sentences." → "How does that connect to continuity?" → "Quiz me: is a function
+  with a hole in its graph continuous at the hole?"
+- **Spanish basics:** "Teach me how to greet someone in Spanish." → "How do I say
+  'I would like a coffee, please'?" → "Quiz me on the greetings you just taught me."
+- **Learning preferences:** "I learn best with real-world examples and analogies,
+  not formal definitions." → "Explain recursion to me in that style." → "What do
+  you remember about how I like to learn?"
+
+Run a flow, hit **Consolidate**, and watch the nodes and edges form.
 
 ---
 

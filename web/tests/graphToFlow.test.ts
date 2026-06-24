@@ -33,9 +33,10 @@ describe('graphToFlow', () => {
     expect(edges[0]).toMatchObject({ id: 'e1', source: 'a', target: 'b', label: 'prerequisite' })
   })
 
-  it('colors a node by type', () => {
+  it('uses the custom node renderer and carries the type (for coloring)', () => {
     const { nodes } = graphToFlow(G)
     const a = nodes.find((n) => n.id === 'a')!
-    expect((a.style as { background?: string }).background).toBeTruthy()
+    expect(a.type).toBe('engram')
+    expect((a.data as { type: string }).type).toBe('concept')
   })
 })
