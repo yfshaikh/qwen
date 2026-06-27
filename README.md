@@ -63,8 +63,11 @@ the `DATABASE_URL` above works out of the box.
 ### Run the service
 
 ```bash
-.venv/bin/uvicorn engram.app.main:app --port 8050
+.venv/bin/uvicorn engram.app.main:app --port 8050 --reload
 ```
+
+`--reload` restarts the server when you edit code; without it a running process keeps
+the old code in memory (drop it in production).
 
 Routes: `GET /health`, `POST /add`, `POST /recall`, `POST /consolidate`,
 `GET /audit`, `GET /events/stream`, `POST /chat` (SSE), `GET /graph`.
