@@ -32,6 +32,14 @@ describe('api', () => {
     expect(rows[0].op).toBe('consolidate')
   })
 
+  it('getHistory unwraps messages', async () => {
+    const fetchMock = vi.fn(async () => jsonResponse({ messages: [{ role: 'user', content: 'hi' }] }))
+    vi.stubGlobal('fetch', fetchMock)
+    const msgs = await api.getHistory('alice')
+    expect(fetchMock).toHaveBeenCalledWith('/history?learner_id=alice&limit=200')
+    expect(msgs).toEqual([{ role: 'user', content: 'hi' }])
+  })
+
   it('getGraph throws on non-ok', async () => {
     vi.stubGlobal('fetch', vi.fn(async () => jsonResponse({}, false, 422)))
     await expect(api.getGraph('')).rejects.toThrow('422')

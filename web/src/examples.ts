@@ -43,3 +43,23 @@ export const EXAMPLE_FLOWS: ExampleFlow[] = [
     ],
   },
 ]
+
+export type DemoStep =
+  | { kind: 'say'; text: string }
+  | { kind: 'consolidate'; note: string }
+
+// A longer, guided "demo path": each message is prefilled so you just hit Send,
+// with Consolidate prompts at the right moments to watch the graph form.
+export const DEMO_PATH: DemoStep[] = [
+  { kind: 'say', text: 'What is a limit in calculus? Keep it to two sentences.' },
+  { kind: 'say', text: 'How does a limit relate to continuity?' },
+  { kind: 'say', text: 'I learn best with concrete examples and analogies.' },
+  { kind: 'say', text: 'Give me an example of a limit in that style.' },
+  { kind: 'consolidate', note: 'Now Consolidate — watch "Limits" and "Continuity" become linked nodes.' },
+  { kind: 'say', text: 'What is a derivative, and how does it build on limits?' },
+  { kind: 'say', text: 'Quiz me with one short question about limits.' },
+  { kind: 'say', text: 'My answer: the function approaches 2 as x nears the point.' },
+  { kind: 'say', text: 'My goal is to pass my calculus final next month.' },
+  { kind: 'consolidate', note: 'Consolidate again — derivatives, the quiz, and your goal join the graph.' },
+  { kind: 'say', text: 'Given what you know about me, what should I review next?' },
+]

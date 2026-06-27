@@ -25,6 +25,13 @@ export async function getAudit(learnerId: string): Promise<AuditRow[]> {
   return (await r.json()).rows
 }
 
+export async function getHistory(learnerId: string, limit = 200): Promise<ChatMessage[]> {
+  const q = new URLSearchParams({ learner_id: learnerId, limit: String(limit) })
+  const r = await fetch(`/history?${q}`)
+  if (!r.ok) throw new Error(`/history ${r.status}`)
+  return (await r.json()).messages
+}
+
 export async function health(): Promise<boolean> {
   try {
     const r = await fetch('/health')
