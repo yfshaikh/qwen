@@ -267,6 +267,18 @@ class PostgresStorage:
             )
             return [_row_to_event(r) for r in rows]
 
+    async def get_events(
+        self, learner_id: str, limit: int = 200
+    ) -> list[LearningEvent]:
+        async with self._pool.acquire() as conn:
+            rows = await conn.fetch(
+                f"SELECT {_EVENT_COLS} FROM engram_events "
+                "WHERE learner_id = $1 ORDER BY ts DESC LIMIT $2",
+                learner_id,
+                limit,
+            )
+            return [_row_to_event(r) for r in reversed(rows)]
+
     async def get_live_nodes(self, learner_id: str) -> list[Node]:
         async with self._pool.acquire() as conn:
             rows = await conn.fetch(

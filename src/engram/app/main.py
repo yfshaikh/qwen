@@ -17,12 +17,14 @@ from engram.app.schemas import (
     AddResponse,
     AuditResponse,
     AuditRow,
+    ChatMessage,
     ChatRequest,
     ConsolidateRequest,
     GraphEdge,
     GraphNode,
     GraphResponse,
     HealthResponse,
+    HistoryResponse,
     RecallRequest,
     RecallResponse,
     ReportOut,
@@ -130,6 +132,22 @@ async def graph(learner_id: str, focus: str | None = None, eng=Depends(get_engra
         nodes=[GraphNode(**n) for n in gv.nodes],
         edges=[GraphEdge(**e) for e in gv.edges],
     )
+
+
+# utterance/tutor_explanation are the tutor's event types; map them back to chat
+# roles so a client can resume a conversation. Other event types are not messages.
+_HISTORY_ROLES = {"utterance": "user", "tutor_explanation": "assistant"}
+
+
+@app.get("/history", response_model=HistoryResponse)
+async def history(learner_id: str, limit: int = 200, eng=Depends(get_engram)):
+    events = await eng.events(learner_id, limit)
+    msgs = [
+        ChatMessage(role=_HISTORY_ROLES[e.type], content=e.text)
+        for e in events
+        if e.type in _HISTORY_ROLES and e.text
+    ]
+    return HistoryResponse(messages=msgs)
 
 
 def _sse_event(event: str, data: dict) -> str:

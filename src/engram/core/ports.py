@@ -61,6 +61,9 @@ class StoragePort(Protocol):
     async def top_evidence(
         self, node_ids: list[str], per_node: int
     ) -> dict[str, list[Evidence]]: ...
+    async def get_events(
+        self, learner_id: str, limit: int = 200
+    ) -> list[LearningEvent]: ...
 
     # consolidation (Phase 2)
     async def get_pending_events(self, learner_id: str) -> list[LearningEvent]: ...

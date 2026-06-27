@@ -156,3 +156,16 @@ async def test_engram_audit_delegates_to_storage():
     )
     rows = await eng.audit("a")
     assert rows[0]["op"] == "consolidate"
+
+
+async def test_events_returns_learner_events_oldest_first():
+    eng = _engram()
+    await eng.ingest(
+        [
+            LearningEvent(learner_id="a", type="utterance", text="hi"),
+            LearningEvent(learner_id="a", type="tutor_explanation", text="hello"),
+            LearningEvent(learner_id="b", type="utterance", text="other"),
+        ]
+    )
+    evs = await eng.events("a")
+    assert [e.text for e in evs] == ["hi", "hello"]  # learner-scoped, in order

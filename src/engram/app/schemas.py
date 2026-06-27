@@ -110,3 +110,7 @@ class GraphEdge(BaseModel):
 class GraphResponse(BaseModel):
     nodes: list[GraphNode]
     edges: list[GraphEdge]
+
+
+class HistoryResponse(BaseModel):
+    messages: list[ChatMessage]

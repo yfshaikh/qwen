@@ -39,6 +39,8 @@ async def test_full_http_path_live():
         async with httpx.AsyncClient(transport=transport, base_url="http://test") as c:
             await c.post("/add", json={"events": [
                 {"learner_id": learner, "type": "utterance", "text": "limit?"}]})
+            hist = await c.get("/history", params={"learner_id": learner})
+            assert any(m["content"] == "limit?" for m in hist.json()["messages"])
             rep = await c.post("/consolidate", json={"learner_id": learner})
             assert rep.json()["nodes_created"] == 1
             aud = await c.get("/audit", params={"learner_id": learner})

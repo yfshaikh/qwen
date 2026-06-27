@@ -121,6 +121,11 @@ class Engram:
     async def audit(self, learner_id: str, since: Any = None, limit: int = 100) -> list[dict]:
         return await self.storage.get_audit(learner_id, since, limit)
 
+    async def events(self, learner_id: str, limit: int = 200) -> list[LearningEvent]:
+        """The raw event log for a learner (oldest-first). Hosts reconstruct chat
+        history from this; the role/type mapping is a host concern, not core."""
+        return await self.storage.get_events(learner_id, limit)
+
     async def graph(self, learner_id: str, focus: str | None = None) -> GraphView:
         from engram.core.graph import build_graph
 

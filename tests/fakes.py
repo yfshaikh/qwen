@@ -158,6 +158,15 @@ class FakeStorage:
             if e.learner_id == learner_id and e.consolidated_at is None
         ]
 
+    async def get_events(
+        self, learner_id: str, limit: int = 200
+    ) -> list[LearningEvent]:
+        evs = sorted(
+            (e for e in self.events if e.learner_id == learner_id),
+            key=lambda e: e.ts,
+        )
+        return evs[-limit:]
+
     async def get_live_nodes(self, learner_id: str) -> list[Node]:
         return [
             n
