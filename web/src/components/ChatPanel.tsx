@@ -135,6 +135,7 @@ export function ChatPanel({
   onSend,
   onConsolidate,
   busy,
+  consolidating,
   prefill,
   prefillKey,
   onStartDemo,
@@ -146,6 +147,7 @@ export function ChatPanel({
   onSend: (text: string) => void
   onConsolidate: () => void
   busy: boolean
+  consolidating?: boolean
   prefill?: string
   prefillKey?: number
   onStartDemo?: () => void
@@ -230,13 +232,22 @@ export function ChatPanel({
           type="button"
           onClick={onConsolidate}
           disabled={busy}
-          className={`mt-2 flex w-full items-center justify-center gap-1.5 rounded-lg border px-3 py-2 text-sm font-medium transition disabled:opacity-40 ${
-            wantConsolidate
-              ? 'animate-pulse border-amber-300 bg-amber-50 text-amber-700'
-              : 'border-zinc-200 bg-white text-zinc-700 hover:border-indigo-200 hover:bg-indigo-50 hover:text-indigo-700'
+          className={`mt-2 flex w-full items-center justify-center gap-1.5 rounded-lg border px-3 py-2 text-sm font-medium transition ${
+            consolidating
+              ? 'border-amber-300 bg-amber-50 text-amber-700'
+              : wantConsolidate
+                ? 'animate-pulse border-amber-300 bg-amber-50 text-amber-700 disabled:opacity-40'
+                : 'border-zinc-200 bg-white text-zinc-700 hover:border-indigo-200 hover:bg-indigo-50 hover:text-indigo-700 disabled:opacity-40'
           }`}
         >
-          ⚡ Consolidate memory
+          {consolidating ? (
+            <>
+              <span className="h-3.5 w-3.5 animate-spin rounded-full border-2 border-amber-300 border-t-amber-600" />
+              Consolidating memory…
+            </>
+          ) : (
+            <>⚡ Consolidate memory</>
+          )}
         </button>
       </form>
     </div>

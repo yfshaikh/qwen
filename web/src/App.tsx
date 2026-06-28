@@ -25,6 +25,7 @@ export default function App() {
   const [audit, setAudit] = useState<AuditRow[]>([])
   const [flash, setFlash] = useState<Set<string>>(new Set())
   const [busy, setBusy] = useState(false)
+  const [consolidating, setConsolidating] = useState(false)
   const [banner, setBanner] = useState<string | null>(null)
   const [traceErr, setTraceErr] = useState<string | undefined>(undefined)
   const [demo, setDemo] = useState<number | null>(null)
@@ -64,6 +65,7 @@ export default function App() {
 
   async function doConsolidate() {
     setBusy(true)
+    setConsolidating(true)
     setTraceErr(undefined)
     try {
       const before = new Set(graph.nodes.map((n) => n.id))
@@ -78,6 +80,7 @@ export default function App() {
     } catch (e) {
       setTraceErr(String(e))
     }
+    setConsolidating(false)
     setBusy(false)
     if (demo !== null && DEMO_PATH[demo].kind === 'consolidate') advanceDemo(demo)
   }
@@ -217,6 +220,7 @@ export default function App() {
             onSend={send}
             onConsolidate={doConsolidate}
             busy={busy}
+            consolidating={consolidating}
             prefill={prefill}
             prefillKey={prefillKey}
             onStartDemo={startDemo}
