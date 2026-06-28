@@ -1,0 +1,24 @@
+id: calc-mastery
+persona: >
+  A motivated student studying for a calculus final next month. Learns best with
+  concrete examples and analogies. Has a misconception that the limit of a
+  function equals the x-value the input approaches.
+hidden_state:
+  mastered: [Continuity]
+  misconception:
+    concept: Limit
+    wrong: "the limit equals the x-value the input approaches"
+  preference: "concrete examples and analogies"
+  goal: "pass the calculus final next month"
+sessions:
+  - intent: "ask what a limit is, then ask how it relates to continuity"
+    turns: 2
+  - intent: "ask to be quizzed on limits, answer with the misconception, then state the goal of passing the final"
+    turns: 3
+probes:
+  - query: "given what you know about me, what should I review next?"
+    expect_nodes: [Limit, "Pass final exam next month"]
+    mastered_not_expected: [Continuity]
+  - query: "quiz me on limits"
+    expect_nodes: [Limit]
+    mastered_not_expected: [Continuity]

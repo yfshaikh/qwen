@@ -90,5 +90,7 @@ def build_llm(settings: Any) -> OpenAICompatibleLLM:
         "tutor": settings.model_for("tutor"),
         "extractor": settings.model_for("extractor"),
         "reflector": settings.model_for("reflector"),
+        "student": settings.model_for("student"),
+        "judge": settings.model_for("judge"),
     }
     return OpenAICompatibleLLM(client=client, role_to_model=role_to_model)

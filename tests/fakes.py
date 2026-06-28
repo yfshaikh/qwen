@@ -112,6 +112,15 @@ class FakeStorage:
         self.evidence.append(ev)
         return ev.id
 
+    async def delete_learner(self, learner_id: str) -> None:
+        dead = {nid for nid, n in self.nodes.items() if n.learner_id == learner_id}
+        self.nodes = {nid: n for nid, n in self.nodes.items() if nid not in dead}
+        self.edges = [e for e in self.edges if e.learner_id != learner_id]
+        self.evidence = [ev for ev in self.evidence if ev.node_id not in dead]
+        self.events = [e for e in self.events if e.learner_id != learner_id]
+        self.mastery_history = [m for m in self.mastery_history if m[0] not in dead]
+        self._audit_rows = [r for r in self._audit_rows if r["learner_id"] != learner_id]
+
     async def vector_search(
         self, learner_id: str, query_vec: list[float], k: int
     ) -> list[Node]:

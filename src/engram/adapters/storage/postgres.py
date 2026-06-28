@@ -167,6 +167,14 @@ class PostgresStorage:
             )
             return str(evid)
 
+    async def delete_learner(self, learner_id: str) -> None:
+        async with self._pool.acquire() as conn:
+            async with conn.transaction():
+                # nodes cascade to edges/evidence/mastery_history (FK ON DELETE CASCADE)
+                await conn.execute("DELETE FROM engram_nodes WHERE learner_id = $1", learner_id)
+                await conn.execute("DELETE FROM engram_events WHERE learner_id = $1", learner_id)
+                await conn.execute("DELETE FROM engram_audit WHERE learner_id = $1", learner_id)
+
     # --- reads ----------------------------------------------------------
 
     async def vector_search(

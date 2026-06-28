@@ -18,6 +18,7 @@ class Settings(BaseSettings):
         extra="ignore",
         case_sensitive=False,
         protected_namespaces=(),
+        populate_by_name=True,
     )
 
     # Chat provider (OpenRouter)
@@ -36,6 +37,8 @@ class Settings(BaseSettings):
     model_extractor: str = Field(alias="ENGRAM_MODEL_EXTRACTOR")
     model_reflector: str = Field(alias="ENGRAM_MODEL_REFLECTOR")
     model_embedder: str = Field(alias="ENGRAM_MODEL_EMBEDDER")
+    model_student: str | None = Field(default=None, alias="ENGRAM_MODEL_STUDENT")
+    model_judge: str | None = Field(default=None, alias="ENGRAM_MODEL_JUDGE")
 
     embedding_dim: int = Field(default=1024, alias="ENGRAM_EMBEDDING_DIM")
 
@@ -61,12 +64,15 @@ class Settings(BaseSettings):
     audit_page_limit: int = Field(default=100, alias="ENGRAM_AUDIT_PAGE_LIMIT")
 
     def model_for(self, role: str) -> str:
+        table = {
+            "tutor": self.model_tutor,
+            "extractor": self.model_extractor,
+            "reflector": self.model_reflector,
+            "embedder": self.model_embedder,
+            "student": self.model_student or self.model_tutor,
+            "judge": self.model_judge or self.model_reflector,
+        }
         try:
-            return {
-                "tutor": self.model_tutor,
-                "extractor": self.model_extractor,
-                "reflector": self.model_reflector,
-                "embedder": self.model_embedder,
-            }[role]
+            return table[role]
         except KeyError as e:
             raise KeyError(f"Unknown LLM role: {role!r}") from e
