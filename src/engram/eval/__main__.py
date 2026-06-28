@@ -1,0 +1,112 @@
+"""CLI for the eval harness:  python -m engram.eval <gen|sweep|demo|report> ...
+
+gen     <scenario.yaml>                       -> writes eval/fixtures/<id>.json
+sweep   <scenario.yaml> <fixture.json> --grid <grid.yaml>  -> Tier-1 sweep report
+demo    <scenario.yaml> <fixture.json>        -> ON vs baseline headline
+report  <results.json>                        -> re-render a saved sweep result
+"""
+from __future__ import annotations
+
+import argparse
+import asyncio
+import json
+import uuid
+from pathlib import Path
+
+import yaml
+
+from engram.core.engram import Engram
+from engram.eval import fixtures, report
+from engram.eval.arms import run_behavior_arm
+from engram.eval.fixtures import load_graph_into
+from engram.eval.metrics import aggregate_behavior, judge_turn
+from engram.eval.scenario import load_scenario
+from engram.eval.sweep import run_tier1_sweep
+
+
+async def _gen(args) -> None:
+    eng = Engram.from_env()
+    await eng.connect()
+    try:
+        sc = load_scenario(args.scenario)
+        fx = await fixtures.generate_fixture(eng, sc, runid="gen")
+        out = Path("eval/fixtures") / f"{sc.id}.json"
+        fixtures.save_fixture(out, scenario_id=fx["scenario_id"], sessions=fx["sessions"], graph=fx["graph"])
+        print(f"wrote {out}  ({len(fx['graph']['nodes'])} nodes)")
+    finally:
+        await eng.aclose()
+
+
+async def _sweep(args) -> None:
+    eng = Engram.from_env()
+    await eng.connect()
+    try:
+        sc = load_scenario(args.scenario)
+        fx = fixtures.load_fixture(args.fixture)
+        grid = yaml.safe_load(Path(args.grid).read_text())
+        result = await run_tier1_sweep(eng.storage, eng.embedder, fx["graph"], sc.probes, grid,
+                                       target=args.target)
+        out = Path("eval/reports") / f"{sc.id}-sweep.md"
+        out.write_text(report.render_markdown(result["rows"], target=args.target, best=result["best"]))
+        (Path("eval/reports") / f"{sc.id}-sweep.csv").write_text(report.render_csv(result["rows"]))
+        print(report.render_markdown(result["rows"], target=args.target, best=result["best"]))
+        print(f"\nwrote {out}")
+    finally:
+        await eng.aclose()
+
+
+async def _demo(args) -> None:
+    eng = Engram.from_env()
+    await eng.connect()
+    learner_id = None
+    try:
+        sc = load_scenario(args.scenario)
+        fx = fixtures.load_fixture(args.fixture)
+        learner_turns = [t["content"] for s in fx["sessions"] for t in s["turns"] if t["role"] == "user"]
+        learner_id = f"eval:{sc.id}:demo-{uuid.uuid4().hex[:8]}"
+        await load_graph_into(eng.storage, fx["graph"], learner_id)
+        on = await run_behavior_arm(eng, learner_turns, learner_id, "on")
+        base = await run_behavior_arm(eng, learner_turns, learner_id, "baseline")
+        on_j = [await judge_turn(eng.llm, r, sc.hidden_state) for r in on]
+        base_j = [await judge_turn(eng.llm, r, sc.hidden_state) for r in base]
+        print(report.headline(aggregate_behavior(on_j), aggregate_behavior(base_j)))
+    finally:
+        if learner_id:
+            await eng.storage.delete_learner(learner_id)
+        await eng.aclose()
+
+
+def _report(args) -> None:
+    data = json.loads(Path(args.results).read_text())
+    print(report.render_markdown(data["rows"], target=data.get("target", "node_hit_rate"),
+                                 best=data.get("best", {})))
+
+
+def main() -> None:
+    ap = argparse.ArgumentParser(prog="engram.eval")
+    sub = ap.add_subparsers(dest="cmd", required=True)
+    g = sub.add_parser("gen")
+    g.add_argument("scenario")
+    s = sub.add_parser("sweep")
+    s.add_argument("scenario")
+    s.add_argument("fixture")
+    s.add_argument("--grid", required=True)
+    s.add_argument("--target", default="node_hit_rate")
+    d = sub.add_parser("demo")
+    d.add_argument("scenario")
+    d.add_argument("fixture")
+    r = sub.add_parser("report")
+    r.add_argument("results")
+    args = ap.parse_args()
+    if args.cmd == "gen":
+        asyncio.run(_gen(args))
+    elif args.cmd == "sweep":
+        asyncio.run(_sweep(args))
+    elif args.cmd == "demo":
+        asyncio.run(_demo(args))
+    elif args.cmd == "report":
+        _report(args)
+
+
+if __name__ == "__main__":
+    main()

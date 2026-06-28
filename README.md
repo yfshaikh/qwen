@@ -111,6 +111,32 @@ Run a flow, hit **Consolidate**, and watch the nodes and edges form.
 
 ---
 
+## 3. Eval harness
+
+`src/engram/eval/` runs against the core library directly (no HTTP) to tune recall
+config and produce the memory-ON-vs-baseline demo numbers. Scenarios live in
+`eval/scenarios/*.yaml`; an LLM "student" authors each scenario's conversation
+**once** and freezes it (transcript + consolidated graph) into a committed fixture
+under `eval/fixtures/`.
+
+```bash
+# 1. Generate (or refresh) a fixture — needs Postgres + API keys (spends LLM calls)
+python -m engram.eval gen eval/scenarios/calc-mastery.yaml
+
+# 2. Tune: sweep recall weights against the frozen graph (Tier-1 — embedder only,
+#    no chat LLM; replays the committed fixture, so it is cheap + reproducible)
+python -m engram.eval sweep eval/scenarios/calc-mastery.yaml \
+  eval/fixtures/calc-mastery.json --grid eval/scenarios/calc-mastery.sweep.yaml
+
+# 3. Demo headline: memory ON vs naive baseline, scored by an LLM judge
+python -m engram.eval demo eval/scenarios/calc-mastery.yaml eval/fixtures/calc-mastery.json
+```
+
+Fixtures are committed so sweeps are reproducible; re-run `gen` to regenerate them
+when prompts change. Reports are written to `eval/reports/` (gitignored).
+
+---
+
 ## Tests
 
 ```bash
