@@ -45,3 +45,20 @@ Limit↔Continuity carries both a `relates_to` and a `prerequisite` edge, one
 added per consolidation. Harmless but duplicative.
 **Fix:** dedupe edges by `(source, target)` pair in the Keeper's link step,
 preferring the stronger relation type.
+
+## 6. Duplicate / near-duplicate concept nodes  (genuine bug)
+The Keeper's merge step doesn't reliably collapse semantically similar concepts,
+so the graph accumulates near-duplicate nodes across sessions — the same concept
+re-extracted under a slightly different label (e.g. "NMOS Transistor" vs "NMOS
+device", or a concept appearing twice). Surfaced directly in Marfini's
+knowledge-map UI as redundant concept cards. Unlike #1–#5 this is a real defect,
+not just a tuning gap.
+**Why:** merge dedups candidates by embedding cosine against
+`keeper_tau_high`/`keeper_tau_low`; if the threshold is too strict, or the
+extractor labels the same concept differently run-to-run, distinct nodes survive
+instead of merging into one. (Surfaced via Marfini integration; the fix is
+Engram-side, in the Keeper.)
+**Fix:** normalize labels (case/whitespace/light stemming) before the embedding
+compare, lower/tune the merge threshold, and/or add a canonicalization pass that
+merges on combined lexical + embedding similarity. Eval-gate the change so
+loosening doesn't over-merge genuinely distinct concepts.
