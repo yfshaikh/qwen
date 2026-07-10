@@ -7,7 +7,7 @@ import json
 from contextlib import asynccontextmanager
 from datetime import datetime
 
-from fastapi import Depends, FastAPI, HTTPException, Request
+from fastapi import Depends, FastAPI, HTTPException, Request, WebSocket, WebSocketDisconnect
 from fastapi.responses import StreamingResponse
 
 from engram.app import deps
@@ -25,12 +25,20 @@ from engram.app.schemas import (
     GraphResponse,
     HealthResponse,
     HistoryResponse,
+    MemoryStatusResponse,
     RecallRequest,
     RecallResponse,
     ReportOut,
+    SessionsResponse,
+    TurnsResponse,
+    VoiceSessionOut,
+    VoiceTurnOut,
 )
 from engram.core.models import LearningEvent
 from engram.tutor.tutor import Tutor
+from engram.voice.pipeline import VoicePipeline
+from engram.voice.stt import transcribe as stt_transcribe
+from engram.voice.tts import stream_speech as tts_stream_speech
 
 DEFAULT_POLL_SECONDS = 1.0
 HEARTBEAT_SECONDS = 15.0
@@ -46,6 +54,22 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(title="Engram", lifespan=lifespan)
+
+# Per-learner "consolidating" refcount for the live status badge. In-process:
+# ponytail: single-node only; move to Tair/Redis if we scale out.
+_consolidating: dict[str, int] = {}
+
+
+def _mark_consolidating(learner_id: str) -> None:
+    _consolidating[learner_id] = _consolidating.get(learner_id, 0) + 1
+
+
+def _unmark_consolidating(learner_id: str) -> None:
+    n = _consolidating.get(learner_id, 0) - 1
+    if n > 0:
+        _consolidating[learner_id] = n
+    else:
+        _consolidating.pop(learner_id, None)
 
 
 @app.get("/health", response_model=HealthResponse)
@@ -169,3 +193,91 @@ async def chat(req: ChatRequest, eng=Depends(get_engram)):
             yield _sse_event("error", {"detail": str(exc)})
 
     return StreamingResponse(gen(), media_type="text/event-stream")
+
+
+@app.get("/sessions", response_model=SessionsResponse)
+async def sessions(learner_id: str, eng=Depends(get_engram)):
+    rows = await eng.list_voice_sessions(learner_id)
+    return SessionsResponse(sessions=[VoiceSessionOut(**r) for r in rows])
+
+
+@app.get("/sessions/{session_id}/turns", response_model=TurnsResponse)
+async def session_turns(session_id: str, eng=Depends(get_engram)):
+    rows = await eng.list_voice_turns(session_id)
+    return TurnsResponse(turns=[VoiceTurnOut(**r) for r in rows])
+
+
+@app.get("/memory/status", response_model=MemoryStatusResponse)
+async def memory_status(learner_id: str):
+    return MemoryStatusResponse(consolidating=_consolidating.get(learner_id, 0) > 0)
+
+
+@app.websocket("/voice")
+async def voice(ws: WebSocket, learner_id: str, eng=Depends(get_engram)):
+    # NB: inject via Depends (not a direct get_engram() call) so tests'
+    # app.dependency_overrides[get_engram] takes effect on the WS route too.
+    s = eng.settings
+    if not s or not getattr(s, "deepgram_api_key", None):
+        await ws.close(code=1011)
+        return
+    await ws.accept()
+    pipeline = VoicePipeline(
+        eng, api_key=s.deepgram_api_key, stt_model=s.deepgram_stt_model,
+        tts_model=s.deepgram_tts_model, language=s.deepgram_language,
+        transcribe=stt_transcribe, stream_speech=tts_stream_speech,
+    )
+    session_id = await eng.create_voice_session(learner_id)
+    await ws.send_json({"type": "session_started", "session_id": session_id})
+
+    async def send_text(msg: dict) -> None:
+        await ws.send_json(msg)
+
+    async def send_bytes(b: bytes) -> None:
+        await ws.send_bytes(b)
+
+    history: list[dict] = []
+    buffer = bytearray()
+    mime = "audio/webm"
+    try:
+        while True:
+            msg = await ws.receive()
+            if msg["type"] == "websocket.disconnect":
+                break
+            if msg.get("bytes") is not None:
+                buffer.extend(msg["bytes"])
+                continue
+            if msg.get("text") is None:
+                continue
+            data = json.loads(msg["text"])
+            kind = data.get("type")
+            if kind == "start":
+                buffer.clear()
+                mime = data.get("mime_type", "audio/webm")
+            elif kind == "end":
+                audio = bytes(buffer)
+                buffer.clear()
+                user_text, reply = await pipeline.run_turn(
+                    audio, mime, learner_id, history, send_text, send_bytes)
+                if user_text:
+                    await eng.append_voice_turn(session_id, learner_id, "user", user_text)
+                    history.append({"role": "user", "content": user_text})
+                if reply:
+                    await eng.append_voice_turn(session_id, learner_id, "assistant", reply)
+                    history.append({"role": "assistant", "content": reply})
+                    await eng.ingest([
+                        LearningEvent(learner_id=learner_id, type="utterance", text=user_text),
+                        LearningEvent(learner_id=learner_id, type="tutor_explanation", text=reply),
+                    ])
+            elif kind == "goodbye":
+                break
+    except WebSocketDisconnect:
+        pass
+    finally:
+        await eng.end_voice_session(session_id)
+        _mark_consolidating(learner_id)
+        try:
+            await eng.consolidate(learner_id)
+        except Exception:  # best-effort: consolidation must never break teardown
+            pass
+        finally:
+            _unmark_consolidating(learner_id)

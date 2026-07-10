@@ -114,3 +114,29 @@ class GraphResponse(BaseModel):
 
 class HistoryResponse(BaseModel):
     messages: list[ChatMessage]
+
+
+class VoiceSessionOut(BaseModel):
+    id: str
+    started_at: datetime | None = None
+    ended_at: datetime | None = None
+    turns: int = 0
+
+
+class SessionsResponse(BaseModel):
+    sessions: list[VoiceSessionOut]
+
+
+class VoiceTurnOut(BaseModel):
+    id: str
+    role: str
+    text: str
+    ts: datetime | None = None
+
+
+class TurnsResponse(BaseModel):
+    turns: list[VoiceTurnOut]
+
+
+class MemoryStatusResponse(BaseModel):
+    consolidating: bool
