@@ -131,6 +131,23 @@ class Engram:
 
         return await build_graph(self.storage, learner_id, focus)
 
+    # --- voice sessions (host-layer passthroughs) -----------------------
+
+    async def create_voice_session(self, learner_id: str) -> str:
+        return await self.storage.create_voice_session(learner_id)
+
+    async def end_voice_session(self, session_id: str) -> None:
+        await self.storage.end_voice_session(session_id)
+
+    async def append_voice_turn(self, session_id, learner_id, role, text) -> str:
+        return await self.storage.append_voice_turn(session_id, learner_id, role, text)
+
+    async def list_voice_sessions(self, learner_id: str, limit: int = 50) -> list[dict]:
+        return await self.storage.list_voice_sessions(learner_id, limit)
+
+    async def list_voice_turns(self, session_id: str) -> list[dict]:
+        return await self.storage.list_voice_turns(session_id)
+
     # --- mem0-style aliases ---------------------------------------------
     # add -> ingest, search -> recall. Aliased to the same functions so a mem0
     # user is instantly productive; the canonical names carry the typed depth.

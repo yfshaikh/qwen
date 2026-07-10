@@ -81,6 +81,8 @@ class FakeStorage:
         self._audit_seq = 0
         self._locked: set[str] = set()
         self._seq = 0
+        self.voice_sessions: dict[str, dict] = {}
+        self.voice_turns: list[dict] = []
 
     def _next_id(self) -> str:
         self._seq += 1
@@ -120,6 +122,11 @@ class FakeStorage:
         self.events = [e for e in self.events if e.learner_id != learner_id]
         self.mastery_history = [m for m in self.mastery_history if m[0] not in dead]
         self._audit_rows = [r for r in self._audit_rows if r["learner_id"] != learner_id]
+        dead_sessions = {sid for sid, s in self.voice_sessions.items()
+                         if s["learner_id"] == learner_id}
+        self.voice_sessions = {sid: s for sid, s in self.voice_sessions.items()
+                               if sid not in dead_sessions}
+        self.voice_turns = [t for t in self.voice_turns if t["learner_id"] != learner_id]
 
     async def vector_search(
         self, learner_id: str, query_vec: list[float], k: int
@@ -255,3 +262,42 @@ class FakeStorage:
         rows.sort(key=lambda r: r["ts"])
         keys = ("id", "op", "rationale", "model", "tokens", "cost", "ts")
         return [{k: r[k] for k in keys} for r in rows[:limit]]
+
+    # --- voice sessions (host-layer) -------------------------------------
+
+    async def create_voice_session(self, learner_id: str) -> str:
+        sid = self._next_id()
+        self.voice_sessions[sid] = {
+            "id": sid, "learner_id": learner_id,
+            "started_at": datetime.now(timezone.utc), "ended_at": None,
+        }
+        return sid
+
+    async def end_voice_session(self, session_id: str) -> None:
+        s = self.voice_sessions.get(session_id)
+        if s is not None:
+            s["ended_at"] = datetime.now(timezone.utc)
+
+    async def append_voice_turn(self, session_id, learner_id, role, text) -> str:
+        tid = self._next_id()
+        self.voice_turns.append({
+            "id": tid, "session_id": session_id, "learner_id": learner_id,
+            "role": role, "text": text, "ts": datetime.now(timezone.utc),
+        })
+        return tid
+
+    async def list_voice_sessions(self, learner_id: str, limit: int = 50) -> list[dict]:
+        rows = [s for s in self.voice_sessions.values() if s["learner_id"] == learner_id]
+        rows.sort(key=lambda s: s["started_at"], reverse=True)
+        out = []
+        for s in rows[:limit]:
+            turns = sum(1 for t in self.voice_turns if t["session_id"] == s["id"])
+            out.append({"id": s["id"], "started_at": s["started_at"],
+                        "ended_at": s["ended_at"], "turns": turns})
+        return out
+
+    async def list_voice_turns(self, session_id: str) -> list[dict]:
+        rows = [t for t in self.voice_turns if t["session_id"] == session_id]
+        rows.sort(key=lambda t: t["ts"])
+        return [{"id": t["id"], "role": t["role"], "text": t["text"], "ts": t["ts"]}
+                for t in rows]
