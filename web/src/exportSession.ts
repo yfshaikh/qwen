@@ -1,5 +1,12 @@
-import type { PendingTurn } from './chat'
 import type { AuditRow, ConsolidateReport, GraphResponse } from './types'
+
+/** Minimal shape shared by the voice transcript's messages — decoupled
+ *  from `VoiceMessage` so this module doesn't need to import from
+ *  `./voice/types` just to build an export blob. */
+export interface ExportableTurn {
+  role: string
+  content: string
+}
 
 export interface SessionExport {
   learner: string
@@ -7,8 +14,6 @@ export interface SessionExport {
   messages: {
     role: string
     content: string
-    recalled?: string
-    saved?: { type: string; text: string | null }[]
   }[]
   keeper: { report: ConsolidateReport | null; audit: AuditRow[] }
   graph: GraphResponse
@@ -16,7 +21,7 @@ export interface SessionExport {
 
 export function buildSessionExport(args: {
   learner: string
-  turns: PendingTurn[]
+  turns: ExportableTurn[]
   report: ConsolidateReport | null
   audit: AuditRow[]
   graph: GraphResponse
@@ -28,8 +33,6 @@ export function buildSessionExport(args: {
     messages: args.turns.map((t) => ({
       role: t.role,
       content: t.content,
-      recalled: t.recalled,
-      saved: t.saved,
     })),
     keeper: { report: args.report, audit: args.audit },
     graph: args.graph,

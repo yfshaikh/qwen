@@ -59,3 +59,17 @@ export interface ChatMessage {
   role: string
   content: string
 }
+
+export interface VoiceSession {
+  id: string
+  started_at: string | null
+  ended_at: string | null
+  turns: number
+}
+
+export interface VoiceTurn {
+  id: string
+  role: 'user' | 'assistant'
+  text: string
+  ts: string | null
+}

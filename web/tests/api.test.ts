@@ -44,18 +44,4 @@ describe('api', () => {
     vi.stubGlobal('fetch', vi.fn(async () => jsonResponse({}, false, 422)))
     await expect(api.getGraph('')).rejects.toThrow('422')
   })
-
-  it('streamChat yields parsed SSE frames', async () => {
-    const enc = new TextEncoder()
-    const body = new ReadableStream({
-      start(c) {
-        c.enqueue(enc.encode('event: delta\ndata: {"text":"hi"}\n\nevent: done\ndata: {"reply":"hi"}\n\n'))
-        c.close()
-      },
-    })
-    vi.stubGlobal('fetch', vi.fn(async () => new Response(body) as Response))
-    const events: string[] = []
-    for await (const f of api.streamChat('alice', [{ role: 'user', content: 'q' }])) events.push(f.event)
-    expect(events).toEqual(['delta', 'done'])
-  })
 })

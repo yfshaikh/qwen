@@ -1,5 +1,4 @@
-import { parseSSE, type SSEFrame } from './sse'
-import type { AuditRow, ChatMessage, ConsolidateReport, GraphResponse } from './types'
+import type { AuditRow, ChatMessage, ConsolidateReport, GraphResponse, VoiceSession, VoiceTurn } from './types'
 
 export async function getGraph(learnerId: string, focus?: string): Promise<GraphResponse> {
   const q = new URLSearchParams({ learner_id: learnerId })
@@ -32,6 +31,24 @@ export async function getHistory(learnerId: string, limit = 200): Promise<ChatMe
   return (await r.json()).messages
 }
 
+export async function getSessions(learnerId: string): Promise<VoiceSession[]> {
+  const r = await fetch(`/sessions?learner_id=${encodeURIComponent(learnerId)}`)
+  if (!r.ok) throw new Error(`/sessions ${r.status}`)
+  return (await r.json()).sessions
+}
+
+export async function getSessionTurns(sessionId: string): Promise<VoiceTurn[]> {
+  const r = await fetch(`/sessions/${sessionId}/turns`)
+  if (!r.ok) throw new Error(`/sessions/${sessionId}/turns ${r.status}`)
+  return (await r.json()).turns
+}
+
+export async function getMemoryStatus(learnerId: string): Promise<boolean> {
+  const r = await fetch(`/memory/status?learner_id=${encodeURIComponent(learnerId)}`)
+  if (!r.ok) return false
+  return (await r.json()).consolidating
+}
+
 export async function health(): Promise<boolean> {
   try {
     const r = await fetch('/health')
@@ -39,18 +56,4 @@ export async function health(): Promise<boolean> {
   } catch {
     return false
   }
-}
-
-export async function* streamChat(
-  learnerId: string,
-  messages: ChatMessage[],
-  budget?: number,
-): AsyncGenerator<SSEFrame> {
-  const r = await fetch('/chat', {
-    method: 'POST',
-    headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ learner_id: learnerId, messages, budget }),
-  })
-  if (!r.ok || !r.body) throw new Error(`/chat ${r.status}`)
-  yield* parseSSE(r)
 }
