@@ -63,6 +63,12 @@ class Settings(BaseSettings):
     audit_poll_seconds: float = Field(default=1.0, alias="ENGRAM_AUDIT_POLL_SECONDS")
     audit_page_limit: int = Field(default=100, alias="ENGRAM_AUDIT_PAGE_LIMIT")
 
+    # Voice (Deepgram) — optional; None disables the voice route.
+    deepgram_api_key: str | None = Field(default=None, alias="DEEPGRAM_API_KEY")
+    deepgram_stt_model: str = Field(default="nova-3", alias="DEEPGRAM_STT_MODEL")
+    deepgram_tts_model: str = Field(default="aura-2-thalia-en", alias="DEEPGRAM_TTS_MODEL")
+    deepgram_language: str | None = Field(default=None, alias="DEEPGRAM_LANGUAGE")
+
     def model_for(self, role: str) -> str:
         table = {
             "tutor": self.model_tutor,
