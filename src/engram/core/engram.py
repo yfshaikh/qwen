@@ -26,6 +26,7 @@ class Engram:
         embedder: Any,
         settings: Any = None,
         token_count: Any = None,
+        now: Any = None,
     ) -> None:
         from engram.core.tokens import heuristic_token_count
 
@@ -34,11 +35,12 @@ class Engram:
         self.embedder = embedder
         self.settings = settings
         self._token_count = token_count or heuristic_token_count
+        self._now = now
 
     # --- construction & lifecycle ---------------------------------------
 
     @classmethod
-    def from_env(cls, **settings_kwargs: Any) -> Engram:
+    def from_env(cls, now: Any = None, **settings_kwargs: Any) -> Engram:
         """Build a fully-wired Engram from environment/.env via Settings.
 
         Pass `_env_file=None` to ignore any on-disk .env (used in tests).
@@ -55,6 +57,7 @@ class Engram:
             llm=build_llm(settings),
             embedder=build_embedder(settings),
             settings=settings,
+            now=now,
         )
 
     async def connect(self) -> None:
@@ -115,7 +118,7 @@ class Engram:
             )
         else:
             params = KeeperParams()
-        keeper = Keeper(self.storage, self.llm, self.embedder, params)
+        keeper = Keeper(self.storage, self.llm, self.embedder, params, clock=self._now)
         return await keeper.consolidate(learner_id)
 
     async def audit(self, learner_id: str, since: Any = None, limit: int = 100) -> list[dict]:
