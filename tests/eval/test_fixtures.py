@@ -43,3 +43,26 @@ async def test_save_load_roundtrip(tmp_path):
     assert loaded["scenario_id"] == "s"
     assert loaded["graph"]["nodes"][0]["embedding"]  # embeddings preserved
     assert json.loads(p.read_text())["graph"]["edges"]
+
+
+async def test_snapshot_includes_forgotten_when_asked():
+    from datetime import datetime, timezone
+    from engram.core.models import Node, NodeType
+    from engram.eval.fixtures import snapshot_graph
+    from tests.fakes import FakeStorage
+
+    s = FakeStorage()
+    await s.insert_node(Node(learner_id="a", type=NodeType.CONCEPT, label="Live",
+                             salience=0.9, embedding=[1.0] * 4))
+    dead = Node(learner_id="a", type=NodeType.CONCEPT, label="Dead",
+                salience=0.01, embedding=[1.0] * 4,
+                forgotten_at=datetime(2026, 2, 1, tzinfo=timezone.utc))
+    await s.insert_node(dead)
+
+    live_only = await snapshot_graph(s, "a")
+    assert [n["label"] for n in live_only["nodes"]] == ["Live"]
+
+    both = await snapshot_graph(s, "a", include_forgotten=True)
+    labels = {n["label"]: n["forgotten_at"] for n in both["nodes"]}
+    assert labels["Live"] is None
+    assert labels["Dead"].startswith("2026-02-01")

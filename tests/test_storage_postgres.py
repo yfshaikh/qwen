@@ -99,3 +99,27 @@ async def test_vector_search_excludes_forgotten(database_url):
         assert [n.label for n in seeds] == ["Here"]
     finally:
         await storage.close()
+
+
+async def test_get_all_nodes_includes_forgotten(database_url):
+    from datetime import datetime, timezone
+
+    storage = PostgresStorage(database_url)
+    await storage.connect()
+    try:
+        learner = f"t-{uuid.uuid4()}"
+        await storage.insert_node(
+            Node(learner_id=learner, type=NodeType.CONCEPT, label="Live",
+                 embedding=_vec(1, 0))
+        )
+        await storage.insert_node(
+            Node(learner_id=learner, type=NodeType.CONCEPT, label="Dead",
+                 embedding=_vec(1, 0), forgotten_at=datetime.now(timezone.utc))
+        )
+        live = await storage.get_live_nodes(learner)
+        assert [n.label for n in live] == ["Live"]
+
+        allnodes = await storage.get_all_nodes(learner)
+        assert {n.label for n in allnodes} == {"Live", "Dead"}
+    finally:
+        await storage.close()

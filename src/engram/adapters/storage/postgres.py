@@ -299,6 +299,14 @@ class PostgresStorage:
             )
             return [_row_to_node(r) for r in rows]
 
+    async def get_all_nodes(self, learner_id: str) -> list[Node]:
+        async with self._pool.acquire() as conn:
+            rows = await conn.fetch(
+                f"SELECT {_NODE_COLS} FROM engram_nodes WHERE learner_id = $1",
+                learner_id,
+            )
+            return [_row_to_node(r) for r in rows]
+
     @asynccontextmanager
     async def consolidation_lock(self, learner_id: str):
         async with self._pool.acquire() as conn:

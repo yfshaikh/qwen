@@ -18,6 +18,7 @@ def node_to_dict(n: Node) -> dict[str, Any]:
         "id": n.id, "type": n.type.value, "label": n.label, "summary": n.summary,
         "mastery": n.mastery, "confidence": n.confidence, "salience": n.salience,
         "embedding": n.embedding,
+        "forgotten_at": n.forgotten_at.isoformat() if n.forgotten_at else None,
     }
 
 
@@ -30,8 +31,11 @@ def evidence_to_dict(ev: Evidence) -> dict[str, Any]:
             "importance": ev.importance, "embedding": ev.embedding}
 
 
-async def snapshot_graph(storage: Any, learner_id: str) -> dict[str, Any]:
-    nodes = await storage.get_live_nodes(learner_id)
+async def snapshot_graph(storage: Any, learner_id: str, *, include_forgotten: bool = False) -> dict[str, Any]:
+    if include_forgotten:
+        nodes = await storage.get_all_nodes(learner_id)
+    else:
+        nodes = await storage.get_live_nodes(learner_id)
     node_ids = [n.id for n in nodes if n.id]
     edges = await storage.get_edges(learner_id, node_ids)
     ev_map = await storage.top_evidence(node_ids, _EVIDENCE_PER_NODE)

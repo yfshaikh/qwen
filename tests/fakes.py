@@ -190,6 +190,9 @@ class FakeStorage:
             if n.learner_id == learner_id and n.forgotten_at is None
         ]
 
+    async def get_all_nodes(self, learner_id: str) -> list[Node]:
+        return [n for n in self.nodes.values() if n.learner_id == learner_id]
+
     @asynccontextmanager
     async def consolidation_lock(self, learner_id: str):
         if learner_id in self._locked:
