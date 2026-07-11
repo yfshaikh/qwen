@@ -4,7 +4,7 @@ import react from '@vitejs/plugin-react'
 import tailwindcss from '@tailwindcss/vite'
 
 const API = process.env.VITE_API_BASE || 'http://localhost:8050'
-const PATHS = ['/chat', '/graph', '/consolidate', '/audit', '/health', '/sessions', '/memory']
+const PATHS = ['/chat', '/graph', '/consolidate', '/audit', '/health', '/sessions', '/memory', '/eval']
 
 export default defineConfig({
   plugins: [react(), tailwindcss()],

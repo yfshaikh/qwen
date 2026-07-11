@@ -6,9 +6,10 @@ import { NodeDetail } from './components/NodeDetail'
 import { SessionSidebar } from './components/SessionSidebar'
 import { VoiceMicPill } from './components/VoiceMicPill'
 import { VoiceTranscriptPanel } from './components/VoiceTranscriptPanel'
+import { EvalsPage } from './components/evals/EvalsPage'
 import { useVoiceTutor } from './voice/useVoiceTutor'
 import * as api from './api'
-import type { AuditRow, ConsolidateReport, GraphNode, GraphResponse } from './types'
+import type { AuditRow, ConsolidateReport, EvalScenario, GraphNode, GraphResponse } from './types'
 import { buildSessionExport, downloadJson } from './exportSession'
 
 function newLearner(): string {
@@ -16,7 +17,8 @@ function newLearner(): string {
 }
 
 export default function App() {
-  const [view, setView] = useState<'explainer' | 'console'>('explainer')
+  const [view, setView] = useState<'explainer' | 'console' | 'evals'>('explainer')
+  const [evalScenarios, setEvalScenarios] = useState<EvalScenario[] | null>(null)
   const [learner, setLearner] = useState(() => localStorage.getItem('engram.learner') || newLearner())
   const [graph, setGraph] = useState<GraphResponse>({ nodes: [], edges: [] })
   const [selected, setSelected] = useState<GraphNode | null>(null)
@@ -40,6 +42,17 @@ export default function App() {
     loadInto(learner) // restore the persisted session's graph + audit trail
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
+
+  // Probe the eval endpoints once on mount; only expose the Evals view if the
+  // feature is present (404/error → feature off, swallow the error).
+  useEffect(() => {
+    api
+      .getEvalScenarios()
+      .then((s) => setEvalScenarios(s))
+      .catch(() => setEvalScenarios(null))
+  }, [])
+
+  const evalsAvailable = evalScenarios !== null
 
   async function doConsolidate() {
     setConsolidating(true)
@@ -162,6 +175,18 @@ export default function App() {
         >
           Export
         </button>
+        {evalsAvailable && (
+          <button
+            onClick={() => setView(view === 'evals' ? 'console' : 'evals')}
+            className={`rounded-lg border px-2.5 py-1 text-xs font-medium transition ${
+              view === 'evals'
+                ? 'border-indigo-200 bg-indigo-50 text-indigo-700'
+                : 'border-zinc-200 text-zinc-600 hover:bg-zinc-50'
+            }`}
+          >
+            Evals
+          </button>
+        )}
         <button
           onClick={() => setView('explainer')}
           className="rounded-lg border border-zinc-200 px-2.5 py-1 text-xs font-medium text-zinc-600 transition hover:bg-zinc-50"
@@ -176,6 +201,10 @@ export default function App() {
         </button>
       </header>
 
+      {view === 'evals' ? (
+        <EvalsPage scenarios={evalScenarios ?? []} />
+      ) : (
+        <>
       <div className="flex min-h-0 flex-1">
         <aside className="flex w-[380px] shrink-0 flex-col border-r border-zinc-200 bg-white">
           <VoiceTranscriptPanel
@@ -205,6 +234,8 @@ export default function App() {
       <footer className="border-t border-zinc-200 bg-white">
         <KeeperTrace report={report} rows={audit} error={traceErr} />
       </footer>
+        </>
+      )}
     </div>
   )
 }

@@ -1,4 +1,14 @@
-import type { AuditRow, ChatMessage, ConsolidateReport, GraphResponse, VoiceSession, VoiceTurn } from './types'
+import type {
+  AuditRow,
+  ChatMessage,
+  ConsolidateReport,
+  EvalRun,
+  EvalScenario,
+  EvalSnapshot,
+  GraphResponse,
+  VoiceSession,
+  VoiceTurn,
+} from './types'
 
 export async function getGraph(learnerId: string, focus?: string): Promise<GraphResponse> {
   const q = new URLSearchParams({ learner_id: learnerId })
@@ -56,4 +66,39 @@ export async function health(): Promise<boolean> {
   } catch {
     return false
   }
+}
+
+export async function getEvalScenarios(): Promise<EvalScenario[]> {
+  const r = await fetch('/eval/scenarios')
+  if (!r.ok) throw new Error(`eval scenarios ${r.status}`)
+  return (await r.json()).scenarios
+}
+export async function getEvalRuns(): Promise<EvalRun[]> {
+  const r = await fetch('/eval/runs')
+  if (!r.ok) throw new Error(`eval runs ${r.status}`)
+  return (await r.json()).runs
+}
+export async function getEvalRun(dir: string): Promise<EvalRun> {
+  const r = await fetch(`/eval/runs/${encodeURIComponent(dir)}`)
+  if (!r.ok) throw new Error(`eval run ${r.status}`)
+  return r.json()
+}
+export async function launchEvalRun(scenarioId: string, budgetUsd?: number): Promise<{ run_id: string; dir: string }> {
+  const body: Record<string, unknown> = { scenario_id: scenarioId }
+  if (budgetUsd !== undefined) body.budget_usd = budgetUsd
+  const r = await fetch('/eval/runs', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body),
+  })
+  if (!r.ok) throw new Error(`eval launch ${r.status}`)
+  return r.json()
+}
+export async function cancelEvalRun(dir: string): Promise<boolean> {
+  const r = await fetch(`/eval/runs/${encodeURIComponent(dir)}/cancel`, { method: 'POST' })
+  if (!r.ok) return false
+  return (await r.json()).cancelled
+}
+export async function getEvalSnapshot(dir: string, n: number): Promise<EvalSnapshot> {
+  const r = await fetch(`/eval/runs/${encodeURIComponent(dir)}/snapshots/${n}`)
+  if (!r.ok) throw new Error(`eval snapshot ${r.status}`)
+  return r.json()
 }

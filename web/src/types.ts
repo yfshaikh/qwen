@@ -73,3 +73,46 @@ export interface VoiceTurn {
   text: string
   ts: string | null
 }
+
+export interface EvalScenario {
+  id: string
+  path: string
+  checks: string[]
+}
+
+export interface EvalCheckResult {
+  name: string
+  metrics: Record<string, number>
+  passed: boolean
+  details: string[]
+  error: string | null
+}
+
+export interface EvalRunCost {
+  tokens_in: number
+  tokens_out: number
+  usd: number
+  by_role: Record<string, { tokens_in: number; tokens_out: number }>
+}
+
+export interface EvalRun {
+  run_id: string
+  dir?: string
+  scenario_id: string
+  status: string
+  started_at: string
+  finished_at: string | null
+  checks: EvalCheckResult[]
+  cost: EvalRunCost
+  error: string | null
+  alive?: boolean
+  // Inlined by the runner at finish (absent while a run is live).
+  transcript?: { role: string; content: string; session: number }[]
+}
+
+export interface EvalSnapshot {
+  session: number
+  sim_ts: string
+  graph: GraphResponse & { evidence?: Record<string, unknown[]> }
+  report: Record<string, number>
+}
