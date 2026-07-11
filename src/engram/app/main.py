@@ -290,6 +290,16 @@ async def voice(ws: WebSocket, learner_id: str, eng=Depends(get_engram)):
             _unmark_consolidating(learner_id)
 
 
+@app.post("/admin/repair-merges")
+async def admin_repair_merges(body: dict, eng=Depends(get_engram)):
+    # NB: auth-less like every route here (accepted demo posture). Do not ship
+    # to a shared environment without adding auth.
+    learner_id = body.get("learner_id")
+    if not learner_id:
+        raise HTTPException(status_code=422, detail="learner_id required")
+    return await eng.repair_merges(learner_id)
+
+
 # --- eval harness surface (flag-gated; spec eval-harness-v2) -----------------
 _RUNS_BASE = eval_runs.RUNS_DIR
 _SCENARIOS_DIR = Path("eval/scenarios")

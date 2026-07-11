@@ -45,6 +45,7 @@ class _S:  # minimal settings stand-in: eval endpoints read only these fields
     # recall fields used by Engram.recall when settings is not None:
     recall_w_recency = 0.3; recall_w_importance = 0.3; recall_w_relevance = 0.4
     recall_seed_k = 8; recall_hops = 2; recall_fanout = 10; recall_default_budget = 800
+    recall_session_buffer = True
     keeper_tau_high = 0.86; keeper_tau_low = 0.72; keeper_ewma_alpha = 0.3
     keeper_salience_bump = 0.3; keeper_prune_floor = 0.05; recall_decay = 0.98
 
