@@ -1,5 +1,7 @@
 # Known issues / rough edges
 
+> **Status (2026-07-11):** all six issues addressed by the memory-quality-fixes spec — #1 session buffer (recall), #2 needs-attention section + prompt directive, #3 node importance + neutral prior, #4 provenance filter, #5 edge dedup w/ precedence, #6 combined merge + repair sweep. Eval gates: [`eval/scenarios/multi-session-em.yaml`](../eval/scenarios/multi-session-em.yaml).
+
 Observed from the `demo-8334427e` trace (2026-06-27). None are bugs — recall
 and consolidation work as designed — but each is a real quality gap worth
 tracking. Ordered roughly by impact.

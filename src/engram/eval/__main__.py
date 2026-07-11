@@ -1,11 +1,12 @@
-"""CLI for the eval harness:  python -m engram.eval <gen|sweep|demo|report|run> ...
+"""CLI for the eval harness:  python -m engram.eval <gen|sweep|demo|report|run|repair> ...
 
 gen     <scenario.yaml>                       -> writes eval/fixtures/<id>.json
-sweep   <scenario.yaml> <fixture.json> --grid <grid.yaml>  -> Tier-1 sweep report
+sweep   <scenario.yaml> <fixture.json> --grid <grid.yaml> [--tier 1|2]  -> sweep report
 demo    <scenario.yaml> <fixture.json>        -> ON vs baseline headline
 report  <results.json>                        -> re-render a saved sweep result
 run     <scenario.yaml> [--checks a,b] [--budget-usd F] [--against R] [--tolerance F]
         -> execute a scenario run, apply checks, compare to a baseline
+repair  --learner X                           -> retroactively merge duplicate nodes
 """
 from __future__ import annotations
 
@@ -23,7 +24,7 @@ from engram.eval.arms import run_behavior_arm
 from engram.eval.fixtures import load_graph_into
 from engram.eval.metrics import aggregate_behavior, judge_turn
 from engram.eval.scenario import load_scenario
-from engram.eval.sweep import run_tier1_sweep
+from engram.eval.sweep import run_tier1_sweep, run_tier2_sweep
 
 
 async def _gen(args) -> None:
@@ -46,8 +47,12 @@ async def _sweep(args) -> None:
         sc = load_scenario(args.scenario)
         fx = fixtures.load_fixture(args.fixture)
         grid = yaml.safe_load(Path(args.grid).read_text())
-        result = await run_tier1_sweep(eng.storage, eng.embedder, fx["graph"], sc.probes, grid,
-                                       target=args.target)
+        if args.tier == 2:
+            result = await run_tier2_sweep(eng, fx["sessions"], sc.probes, grid,
+                                           target=args.target)
+        else:
+            result = await run_tier1_sweep(eng.storage, eng.embedder, fx["graph"],
+                                           sc.probes, grid, target=args.target)
         out = Path("eval/reports") / f"{sc.id}-sweep.md"
         out.write_text(report.render_markdown(result["rows"], target=args.target, best=result["best"]))
         (Path("eval/reports") / f"{sc.id}-sweep.csv").write_text(report.render_csv(result["rows"]))
@@ -75,6 +80,18 @@ async def _demo(args) -> None:
     finally:
         if learner_id:
             await eng.storage.delete_learner(learner_id)
+        await eng.aclose()
+
+
+async def _repair(args) -> None:
+    eng = Engram.from_env()
+    await eng.connect()
+    try:
+        out = await eng.repair_merges(args.learner)
+        for p in out["pairs"]:
+            print(f"merged {p}")
+        print(f"merged={out['merged']} skipped={out['skipped']}")
+    finally:
         await eng.aclose()
 
 
@@ -142,6 +159,7 @@ def main() -> None:
     s.add_argument("fixture")
     s.add_argument("--grid", required=True)
     s.add_argument("--target", default="node_hit_rate")
+    s.add_argument("--tier", type=int, choices=(1, 2), default=1)
     d = sub.add_parser("demo")
     d.add_argument("scenario")
     d.add_argument("fixture")
@@ -153,6 +171,8 @@ def main() -> None:
     rn.add_argument("--budget-usd", type=float, default=None)
     rn.add_argument("--against")
     rn.add_argument("--tolerance", type=float, default=0.0)
+    rp = sub.add_parser("repair")
+    rp.add_argument("--learner", required=True)
     args = ap.parse_args()
     if args.cmd == "gen":
         asyncio.run(_gen(args))
@@ -164,6 +184,8 @@ def main() -> None:
         _report(args)
     elif args.cmd == "run":
         asyncio.run(_run(args))
+    elif args.cmd == "repair":
+        asyncio.run(_repair(args))
 
 
 if __name__ == "__main__":

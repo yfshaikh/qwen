@@ -61,9 +61,8 @@ rebuilding the graph:
   `recall_fanout`, `recall_default_budget` — re-score the frozen graph. This is what
   the `sweep` CLI runs.
 - **Tier-2** (rebuild from transcript): Keeper/decay params change the graph, so the
-  transcript must be re-consolidated per grid point. Implemented as the
-  `rebuild_graph_from_transcript` helper but **not yet wired into the CLI** (see
-  Future improvements).
+  transcript must be re-consolidated per grid point. Use `sweep ... --tier 2` (LLM in
+  the loop — costs money with a real provider).
 
 ## Modules
 
@@ -157,8 +156,25 @@ disjoint metric set yields no regressions but prints a warning).
 
 ## Known limitations & future improvements
 
-The v2 `run` verb + multi-session `calc-mastery` address the early
-discrimination/baseline/budget gaps. Remaining items:
+The v2 `run` verb + multi-session scenarios address the early
+discrimination/baseline/budget gaps. Use [`eval/scenarios/multi-session-em.yaml`](../eval/scenarios/multi-session-em.yaml)
+for the discriminating eval (near-duplicate bait via "EM induction" /
+"electromagnetic induction", decay via `gap_days`, and over-merge guards on
+Faraday vs Lenz vs induction). The default sweep grid now includes
+`recall_default_budget: [150, 400, 800]` so budget pressure is part of tuning.
+Tier-2 sweep is wired: `python -m engram.eval sweep <scenario> <fixture> --grid G --tier 2`
+(rebuilds the graph per grid point — LLM in the loop, costs money).
+
+**Eval gates** for the memory-quality fixes: run
+`python -m engram.eval run eval/scenarios/multi-session-em.yaml` and expect
+`dedup` (`duplicate_label_rate <= 0.05`) and `importance`
+(`importance_coverage >= 0.9`) to pass alongside the other scenario checks.
+
+**Repair** retroactively merges duplicate nodes on existing graphs:
+`python -m engram.eval repair --learner <id>` (CLI) or `POST /admin/repair-merges`
+(HTTP admin surface).
+
+Remaining items:
 
 1. **Determinism / sample size.** The behavior arm is a single run over a few
    turns and `temperature` is unset, so judge numbers wobble between runs. *Fix:*
@@ -176,6 +192,3 @@ discrimination/baseline/budget gaps. Remaining items:
 
 4. **Optional third arm.** The spec notes a `mem0` baseline arm as benchmarked
    prior art — not built.
-
-5. **Tier-2 sweep not exposed.** `rebuild_graph_from_transcript` exists but the CLI
-   only runs Tier-1. *Fix:* add a `--tier 2` path to the `sweep` command (spec 2).

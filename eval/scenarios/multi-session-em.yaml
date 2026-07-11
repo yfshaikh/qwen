@@ -1,0 +1,51 @@
+id: multi-session-em
+persona: >
+  An undergraduate studying electromagnetism over several weeks for a midterm.
+  Curious, asks many small questions, often abbreviates "electromagnetic
+  induction" as "EM induction". Prefers short bullet-point answers and says so
+  early. Already solid on Ohm's law. Holds a misconception that induced current
+  opposes a magnet's motion because energy is lost as heat (rather than because
+  flux change induces an opposing EMF — Lenz's law).
+hidden_state:
+  mastered: [Ohm's law]
+  misconception:
+    concept: Electromagnetic induction
+    wrong: "induced current opposes motion because energy is lost as heat"
+  preference: "short bullet-point answers"
+  goal: "pass the electromagnetism midterm"
+sessions:
+  - intent: >
+      briefly demonstrate mastery of Ohm's law, state your preference for short
+      bullet-point answers and the goal of passing the midterm, then ask what
+      electromagnetic induction is and how it relates to magnetic flux
+    turns: 8
+  - intent: >
+      ask about Faraday's law, Lenz's law, transformers, and electric motors —
+      always saying "EM induction" (abbreviated); when quizzed about induced
+      current direction, answer with your misconception
+    turns: 8
+    gap_days: 10
+  - intent: >
+      ask to be quizzed on electromagnetic induction and Faraday's law, repeat
+      the misconception once, then ask what to review before the midterm
+    turns: 8
+    gap_days: 20
+probes:
+  - query: "what should I review before my electromagnetism midterm?"
+    expect_nodes: [Electromagnetic induction]
+    mastered_not_expected: [Ohm's law]
+  - query: "quiz me on Faraday's law"
+    expect_nodes: [Faraday's law]
+  - query: "how do transformers work?"
+    expect_nodes: [Transformer]
+checks:
+  - recall_probes
+  - behavior
+  - name: dedup
+    threshold: 0.05
+  - name: importance
+    threshold: 0.9
+  - integrity
+  - name: lifecycle
+    expect:
+      kept: [Electromagnetic induction, Faraday's law]

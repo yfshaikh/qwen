@@ -17,6 +17,7 @@ def node_to_dict(n: Node) -> dict[str, Any]:
     return {
         "id": n.id, "type": n.type.value, "label": n.label, "summary": n.summary,
         "mastery": n.mastery, "confidence": n.confidence, "salience": n.salience,
+        "importance": n.importance,
         "embedding": n.embedding,
         "forgotten_at": n.forgotten_at.isoformat() if n.forgotten_at else None,
     }
@@ -62,6 +63,7 @@ async def load_graph_into(storage: Any, graph: dict, learner_id: str) -> dict[st
             learner_id=learner_id, type=NodeType(nd["type"]), label=nd["label"],
             summary=nd.get("summary"), mastery=nd.get("mastery"),
             confidence=nd.get("confidence"), salience=nd.get("salience"),
+            importance=nd.get("importance"),
             embedding=nd.get("embedding"),
         ))
         idmap[nd["id"]] = new_id
@@ -92,11 +94,17 @@ def student_prompt(scenario: "Scenario", intent: str, transcript: str) -> list["
 
 
 async def generate_fixture(eng: Any, scenario: "Scenario", runid: str) -> dict[str, Any]:
+    from engram.eval.clock import SimClock
+
     learner_id = f"eval:{scenario.id}:{runid}"
     sessions_out: list[dict] = []
     history: list[dict] = []
+    clock = SimClock()
+    eng._now = clock
     try:
         for session in scenario.sessions:
+            if session.gap_days:
+                clock.advance(days=session.gap_days)
             turns: list[dict] = []
             for _ in range(session.turns):
                 transcript = "\n".join(f"{h['role']}: {h['content']}" for h in history)
@@ -111,8 +119,11 @@ async def generate_fixture(eng: Any, scenario: "Scenario", runid: str) -> dict[s
                     LearningEvent(learner_id=learner_id, type="utterance", text=user),
                     LearningEvent(learner_id=learner_id, type="tutor_explanation", text=reply),
                 ])
-            sessions_out.append({"turns": turns})
-        await eng.consolidate(learner_id)
+            await eng.consolidate(learner_id)
+            sess: dict[str, Any] = {"turns": turns}
+            if session.gap_days:
+                sess["gap_days"] = session.gap_days
+            sessions_out.append(sess)
         graph = await snapshot_graph(eng.storage, learner_id)
     finally:
         await eng.storage.delete_learner(learner_id)
