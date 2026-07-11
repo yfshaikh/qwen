@@ -4,9 +4,12 @@ from __future__ import annotations
 
 import asyncio
 import json
+import re
 from contextlib import asynccontextmanager
 from datetime import datetime
+from pathlib import Path
 
+import yaml
 from fastapi import Depends, FastAPI, HTTPException, Request, WebSocket, WebSocketDisconnect
 from fastapi.responses import StreamingResponse
 
@@ -35,6 +38,10 @@ from engram.app.schemas import (
     VoiceTurnOut,
 )
 from engram.core.models import LearningEvent
+from engram.eval import runs as eval_runs
+from engram.eval.clock import SimClock
+from engram.eval.runner import execute_run
+from engram.eval.scenario import load_scenario
 from engram.tutor.tutor import Tutor
 from engram.voice.pipeline import VoicePipeline
 from engram.voice.stt import transcribe as stt_transcribe
@@ -281,3 +288,131 @@ async def voice(ws: WebSocket, learner_id: str, eng=Depends(get_engram)):
             pass
         finally:
             _unmark_consolidating(learner_id)
+
+
+# --- eval harness surface (flag-gated; spec eval-harness-v2) -----------------
+_RUNS_BASE = eval_runs.RUNS_DIR
+_SCENARIOS_DIR = Path("eval/scenarios")
+_eval_tasks: dict[str, "asyncio.Task"] = {}
+_DIR_RE = re.compile(r"[A-Za-z0-9._-]+")
+
+
+def _eval_enabled(eng) -> None:
+    if not getattr(eng.settings, "eval_ui", False):
+        raise HTTPException(status_code=404)
+
+
+def _run_dir(name: str) -> Path:
+    # Path-traversal guard: the regex allows dots, so bare "."/".." (which
+    # resolve to eval/runs itself or its parent) must be rejected explicitly.
+    if name in (".", "..") or not _DIR_RE.fullmatch(name):
+        raise HTTPException(status_code=404)
+    d = _RUNS_BASE / name
+    if not (d / "run.json").exists():
+        raise HTTPException(status_code=404)
+    return d
+
+
+def _load_scenarios() -> dict[str, tuple[Path, list[str]]]:
+    out: dict[str, tuple[Path, list[str]]] = {}
+    for p in sorted(_SCENARIOS_DIR.glob("*.yaml")):
+        try:
+            data = yaml.safe_load(p.read_text()) or {}
+        except yaml.YAMLError:
+            continue
+        if data.get("id"):
+            names = [c if isinstance(c, str) else c.get("name", "?")
+                     for c in data.get("checks", []) or []]
+            out[data["id"]] = (p, names)
+    return out
+
+
+@app.get("/eval/scenarios")
+async def eval_scenarios(eng=Depends(get_engram)):
+    _eval_enabled(eng)
+    return {"scenarios": [{"id": sid, "path": str(p), "checks": names}
+                          for sid, (p, names) in _load_scenarios().items()]}
+
+
+@app.get("/eval/runs")
+async def eval_runs_list(eng=Depends(get_engram)):
+    _eval_enabled(eng)
+    rows = eval_runs.list_runs(base_dir=_RUNS_BASE)
+    for r in rows:
+        t = _eval_tasks.get(r.get("dir", ""))
+        r["alive"] = bool(t and not t.done())
+    return {"runs": rows}
+
+
+@app.post("/eval/runs", status_code=202)
+async def eval_run_launch(body: dict, eng=Depends(get_engram)):
+    _eval_enabled(eng)
+    if any(not t.done() for t in _eval_tasks.values()):
+        raise HTTPException(status_code=409, detail="a run is already in progress")
+    scenarios = _load_scenarios()
+    sid = body.get("scenario_id")
+    if sid not in scenarios:
+        raise HTTPException(status_code=404, detail=f"unknown scenario; known: {sorted(scenarios)}")
+    sc = load_scenario(scenarios[sid][0])
+    run_id, run_dir = eval_runs.new_run(sc.id, base_dir=_RUNS_BASE)
+    checks = body.get("checks")
+    budget = body.get("budget_usd")
+    task = asyncio.create_task(execute_run(
+        eng, sc, run_dir, checks=checks, max_cost_usd=budget, clock=SimClock(),
+        emit=lambda e: eval_runs.append_event(run_dir, e)))
+    _eval_tasks[run_dir.name] = task
+    return {"run_id": run_id, "dir": run_dir.name}
+
+
+@app.get("/eval/runs/{name}")
+async def eval_run_detail(name: str, eng=Depends(get_engram)):
+    _eval_enabled(eng)
+    return eval_runs.read_run(_run_dir(name))
+
+
+@app.get("/eval/runs/{name}/snapshots/{n}")
+async def eval_run_snapshot(name: str, n: int, eng=Depends(get_engram)):
+    _eval_enabled(eng)
+    p = _run_dir(name) / "snapshots" / f"session-{n}.json"
+    if not p.exists():
+        raise HTTPException(status_code=404)
+    return json.loads(p.read_text())
+
+
+@app.post("/eval/runs/{name}/cancel")
+async def eval_run_cancel(name: str, eng=Depends(get_engram)):
+    _eval_enabled(eng)
+    t = _eval_tasks.get(name)
+    if t and not t.done():
+        t.cancel()
+        return {"cancelled": True}
+    return {"cancelled": False}
+
+
+@app.get("/eval/runs/{name}/events")
+async def eval_run_events(request: Request, name: str, eng=Depends(get_engram)):
+    _eval_enabled(eng)
+    run_dir = _run_dir(name)
+
+    async def gen():
+        cursor, idle = 0, 0.0
+        while True:
+            if await request.is_disconnected():
+                break
+            events, cursor = eval_runs.read_events(run_dir, cursor)
+            for e in events:
+                yield f"data: {json.dumps(e, default=str)}\n\n"
+                idle = 0.0
+            t = _eval_tasks.get(name)
+            alive = bool(t and not t.done())
+            if events and events[-1].get("type") == "status" and not alive \
+                    and events[-1].get("status") != "running":
+                break  # terminal status replayed; stream complete
+            if not events:
+                idle += DEFAULT_POLL_SECONDS
+                if idle >= HEARTBEAT_SECONDS:
+                    yield ": ping\n\n"
+                    idle = 0.0
+            await asyncio.sleep(DEFAULT_POLL_SECONDS)
+
+    return StreamingResponse(gen(), media_type="text/event-stream")
