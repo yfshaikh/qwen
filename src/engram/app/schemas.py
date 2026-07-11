@@ -96,6 +96,7 @@ class GraphNode(BaseModel):
     mastery: float | None = None
     confidence: float | None = None
     salience: float | None = None
+    importance: float | None = None
     evidence: list[GraphEvidence] = Field(default_factory=list)
 
 

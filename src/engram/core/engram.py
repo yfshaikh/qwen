@@ -15,10 +15,12 @@ from __future__ import annotations
 
 from typing import Any
 
-from engram.core.models import GraphView, LearningEvent, RecallResult
+from engram.core.models import AuditRow, GraphView, LearningEvent, RecallResult
 
 
 class Engram:
+    enabled = True
+
     def __init__(
         self,
         storage: Any,
@@ -141,8 +143,14 @@ class Engram:
         keeper = Keeper(self.storage, self.llm, self.embedder, params, clock=self._now)
         return await keeper.repair_merges(learner_id)
 
-    async def audit(self, learner_id: str, since: Any = None, limit: int = 100) -> list[dict]:
-        return await self.storage.get_audit(learner_id, since, limit)
+    async def audit(self, learner_id: str, since: Any = None, limit: int = 100) -> list[AuditRow]:
+        rows = await self.storage.get_audit(learner_id, since, limit)
+        return [AuditRow(
+            id=str(r["id"]), op=r["op"], rationale=r.get("rationale"),
+            model=r.get("model"), tokens=r.get("tokens"),
+            cost=float(r["cost"]) if r.get("cost") is not None else None,
+            ts=r["ts"],
+        ) for r in rows]
 
     async def events(self, learner_id: str, limit: int = 200) -> list[LearningEvent]:
         """The raw event log for a learner (oldest-first). Hosts reconstruct chat

@@ -5,7 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from enum import Enum
-from typing import Any
+from typing import Any, TypedDict
 
 
 def _now() -> datetime:
@@ -101,13 +101,80 @@ class Completion:
     model: str | None = None
 
 
+# --- typed shapes for the dict-valued returns (consumer SDK) -----------------
+# TypedDicts, not dataclasses: runtime objects stay plain dicts so JSON wire
+# shapes and existing dict-style consumers are untouched; only checkers see them.
+
+
+class EvidenceRef(TypedDict):
+    kind: str
+    content: str | None
+    importance: float | None
+
+
+class ScoredNode(TypedDict):
+    id: str | None
+    type: str
+    label: str
+    mastery: float | None
+    confidence: float | None
+    salience: float | None
+    importance: float | None
+    score: float
+    scores: dict[str, float]
+    evidence: list[EvidenceRef]
+
+
+class SubgraphEdge(TypedDict):
+    id: str | None
+    source: str
+    target: str
+    type: str
+    weight: float
+
+
+class Subgraph(TypedDict):
+    nodes: list[ScoredNode]
+    edges: list[SubgraphEdge]
+
+
+class GraphNode(TypedDict):
+    id: str | None
+    label: str
+    type: str
+    summary: str | None
+    mastery: float | None
+    confidence: float | None
+    salience: float | None
+    importance: float | None
+    evidence: list[EvidenceRef]
+
+
+class GraphEdge(TypedDict):
+    id: str | None
+    source: str
+    target: str
+    type: str
+    weight: float
+
+
+class AuditRow(TypedDict):
+    id: str
+    op: str
+    rationale: str | None
+    model: str | None
+    tokens: int | None
+    cost: float | None
+    ts: Any  # datetime from storage; hosts/HTTP layers serialize
+
+
 @dataclass(slots=True)
 class RecallResult:
     text_block: str
-    subgraph: dict[str, Any]
+    subgraph: Subgraph
 
 
 @dataclass(slots=True)
 class GraphView:
-    nodes: list[dict[str, Any]]
-    edges: list[dict[str, Any]]
+    nodes: list[GraphNode]
+    edges: list[GraphEdge]
