@@ -24,7 +24,7 @@ from engram.core.models import (
 
 _NODE_COLS = (
     "id, learner_id, type, label, summary, mastery, confidence, salience, "
-    "embedding, source_refs, forgotten_at, created_at, last_seen_at"
+    "importance, embedding, source_refs, forgotten_at, created_at, last_seen_at"
 )
 
 
@@ -62,6 +62,7 @@ def _row_to_node(row: asyncpg.Record) -> Node:
         mastery=row["mastery"],
         confidence=row["confidence"],
         salience=row["salience"],
+        importance=row["importance"],
         # pgvector yields numpy.float32 elements; coerce to plain float so the
         # domain (and JSON serialization on the /recall path) sees list[float].
         embedding=[float(x) for x in emb] if emb is not None else None,
@@ -131,12 +132,12 @@ class PostgresStorage:
                 """
                 INSERT INTO engram_nodes
                   (learner_id, type, label, summary, mastery, confidence,
-                   salience, embedding, source_refs, forgotten_at)
-                VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
+                   salience, importance, embedding, source_refs, forgotten_at)
+                VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)
                 RETURNING id
                 """,
                 n.learner_id, n.type.value, n.label, n.summary, n.mastery,
-                n.confidence, n.salience, n.embedding, n.source_refs, n.forgotten_at,
+                n.confidence, n.salience, n.importance, n.embedding, n.source_refs, n.forgotten_at,
             )
             return str(nid)
 
@@ -269,13 +270,25 @@ class PostgresStorage:
 
     # --- consolidation (Phase 2) ----------------------------------------
 
-    async def get_pending_events(self, learner_id: str) -> list[LearningEvent]:
+    async def get_pending_events(
+        self, learner_id: str, *, limit: int | None = None
+    ) -> list[LearningEvent]:
         async with self._pool.acquire() as conn:
-            rows = await conn.fetch(
-                f"SELECT {_EVENT_COLS} FROM engram_events "
-                "WHERE learner_id = $1 AND consolidated_at IS NULL ORDER BY ts",
-                learner_id,
-            )
+            if limit is None:
+                rows = await conn.fetch(
+                    f"SELECT {_EVENT_COLS} FROM engram_events "
+                    "WHERE learner_id = $1 AND consolidated_at IS NULL ORDER BY ts",
+                    learner_id,
+                )
+            else:
+                # Newest-first fetch, then chronological for the buffer.
+                rows = await conn.fetch(
+                    f"SELECT {_EVENT_COLS} FROM engram_events "
+                    "WHERE learner_id = $1 AND consolidated_at IS NULL "
+                    "ORDER BY ts DESC LIMIT $2",
+                    learner_id, limit,
+                )
+                rows = list(reversed(rows))
             return [_row_to_event(r) for r in rows]
 
     async def get_events(
@@ -330,12 +343,12 @@ class PostgresStorage:
                         """
                         INSERT INTO engram_nodes
                           (learner_id, type, label, summary, mastery, confidence,
-                           salience, embedding, source_refs, forgotten_at, last_seen_at)
-                        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)
+                           salience, importance, embedding, source_refs, forgotten_at, last_seen_at)
+                        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)
                         RETURNING id
                         """,
                         n.learner_id, n.type.value, n.label, n.summary, n.mastery,
-                        n.confidence, n.salience, n.embedding, n.source_refs,
+                        n.confidence, n.salience, n.importance, n.embedding, n.source_refs,
                         n.forgotten_at, n.last_seen_at,
                     )
                     idmap[n.id] = str(real)
@@ -349,6 +362,12 @@ class PostgresStorage:
                         " VALUES ($1,$2,$3,$4,$5)",
                         e.learner_id, rid(e.source_id), rid(e.target_id), e.type.value, e.weight,
                     )
+                for e in plan.edge_updates:
+                    await conn.execute(
+                        "UPDATE engram_edges SET type=$1, weight=$2,"
+                        " source_id=$3, target_id=$4 WHERE id=$5",
+                        e.type.value, e.weight, e.source_id, e.target_id, e.id,
+                    )
                 for ev in plan.new_evidence:
                     await conn.execute(
                         "INSERT INTO engram_evidence"
@@ -360,9 +379,9 @@ class PostgresStorage:
                 for n in plan.node_updates:
                     await conn.execute(
                         "UPDATE engram_nodes SET mastery=$1, confidence=$2, salience=$3,"
-                        " last_seen_at=$4, forgotten_at=$5 WHERE id=$6",
-                        n.mastery, n.confidence, n.salience, n.last_seen_at,
-                        n.forgotten_at, n.id,
+                        " importance=$4, last_seen_at=$5, forgotten_at=$6 WHERE id=$7",
+                        n.mastery, n.confidence, n.salience, n.importance,
+                        n.last_seen_at, n.forgotten_at, n.id,
                     )
                 for mp in plan.mastery_history:
                     await conn.execute(
@@ -384,6 +403,79 @@ class PostgresStorage:
                         " WHERE id = ANY($1::uuid[])",
                         plan.processed_event_ids,
                     )
+
+    async def merge_nodes(self, learner_id: str, keep_id: str, drop_id: str, *,
+                          mastery, confidence, salience, importance,
+                          rationale: str) -> None:
+        """Repair-merge drop into keep: union evidence, repoint edges (dropping
+        self-loops and weaker duplicates on keep's incident pairs), update keep's
+        scores, soft-forget drop. One transaction; audited as op=merge.
+
+        Duplicate-edge cleanup is scoped to pairs touching keep_id (not
+        learner-wide). Tie-break matches FakeStorage: higher
+        (edge_rank, weight, id) wins. Rank CASE must stay in sync with
+        engram.core.edges.EDGE_RANK.
+        """
+        async with self._pool.acquire() as conn:
+            async with conn.transaction():
+                await conn.execute(
+                    "UPDATE engram_evidence SET node_id=$1 WHERE node_id=$2",
+                    keep_id, drop_id)
+                await conn.execute(
+                    "UPDATE engram_edges SET source_id=$1 WHERE source_id=$2",
+                    keep_id, drop_id)
+                await conn.execute(
+                    "UPDATE engram_edges SET target_id=$1 WHERE target_id=$2",
+                    keep_id, drop_id)
+                await conn.execute(
+                    "DELETE FROM engram_edges WHERE learner_id=$1 AND source_id=target_id",
+                    learner_id)
+                # Capture weaker duplicates before delete for the audit trail.
+                dropped = await conn.fetch(
+                    """
+                    SELECT a.id, a.type, a.weight, a.source_id, a.target_id
+                    FROM engram_edges a
+                    JOIN engram_edges b ON a.learner_id=b.learner_id AND a.id <> b.id
+                      AND ((a.source_id=b.source_id AND a.target_id=b.target_id)
+                        OR (a.source_id=b.target_id AND a.target_id=b.source_id))
+                      AND (a.source_id=$2 OR a.target_id=$2)
+                      AND (b.source_id=$2 OR b.target_id=$2)
+                      AND (CASE a.type WHEN 'prerequisite' THEN 2 WHEN 'part_of' THEN 1 ELSE 0 END,
+                           a.weight, a.id)
+                        < (CASE b.type WHEN 'prerequisite' THEN 2 WHEN 'part_of' THEN 1 ELSE 0 END,
+                           b.weight, b.id)
+                    WHERE a.learner_id=$1
+                    """,
+                    learner_id, keep_id)
+                await conn.execute(
+                    """
+                    DELETE FROM engram_edges a USING engram_edges b
+                    WHERE a.learner_id=$1 AND b.learner_id=$1 AND a.id <> b.id
+                      AND (a.source_id=$2 OR a.target_id=$2)
+                      AND (b.source_id=$2 OR b.target_id=$2)
+                      AND ((a.source_id=b.source_id AND a.target_id=b.target_id)
+                        OR (a.source_id=b.target_id AND a.target_id=b.source_id))
+                      AND (CASE a.type WHEN 'prerequisite' THEN 2 WHEN 'part_of' THEN 1 ELSE 0 END,
+                           a.weight, a.id)
+                        < (CASE b.type WHEN 'prerequisite' THEN 2 WHEN 'part_of' THEN 1 ELSE 0 END,
+                           b.weight, b.id)
+                    """,
+                    learner_id, keep_id)
+                await conn.execute(
+                    "UPDATE engram_nodes SET mastery=$1, confidence=$2, salience=$3,"
+                    " importance=$4 WHERE id=$5",
+                    mastery, confidence, salience, importance, keep_id)
+                await conn.execute(
+                    "UPDATE engram_nodes SET forgotten_at=now() WHERE id=$1", drop_id)
+                audit = rationale
+                if dropped:
+                    bits = ", ".join(
+                        f"{r['type']}@{float(r['weight']):.2f}" for r in dropped)
+                    audit = f"{rationale}; dropped duplicate edges: {bits}"
+                await conn.execute(
+                    "INSERT INTO engram_audit (learner_id, op, rationale)"
+                    " VALUES ($1, 'merge', $2)",
+                    learner_id, audit)
 
     async def get_audit(self, learner_id: str, since=None, limit: int = 100) -> list[dict]:
         async with self._pool.acquire() as conn:

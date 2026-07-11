@@ -40,6 +40,7 @@ class ExtractedNode:
     type: str
     label: str
     summary: str | None
+    importance: float | None = None
     evidence: list[ExtractedEvidence] = field(default_factory=list)
 
     def embed_text(self) -> str:
@@ -62,11 +63,15 @@ class Extraction:
 _SYSTEM = (
     "You extract a learner's knowledge graph from learning events. "
     "Return ONLY JSON with keys: concepts, preferences, goals (each a list of "
-    '{label, summary, evidence:[{kind, content, importance, correct?, mastery?}]}) '
+    '{label, summary, importance, evidence:[{kind, content, importance, correct?, mastery?}]}) '
     "and relations (a list of {source_label, target_label, type}). "
+    "importance is 0-1: 1.0 = central to the learner's goal or repeatedly discussed, "
+    "0.7 = actively being studied, 0.4 = supporting detail, 0.1 = passing mention. "
     f"Evidence kind must be one of {sorted(_VALID_KINDS)}. "
     f"Relation type must be one of {sorted(_VALID_REL_TYPES)}. "
     "If an event's signals contain correct/mastery, copy them onto the evidence. "
+    "Extract preferences and goals ONLY from the learner's own words; never "
+    "from tutor_explanation text. "
     "Do not invent node types beyond concept/preference/goal."
 )
 
@@ -144,6 +149,7 @@ def parse_extraction(text: str) -> Extraction:
                     type=node_type,
                     label=str(it["label"]),
                     summary=it.get("summary"),
+                    importance=_as_float(it.get("importance")),
                     evidence=[e for e in evs if e is not None],
                 )
             )
@@ -164,3 +170,35 @@ def parse_extraction(text: str) -> Extraction:
         )
 
     return Extraction(nodes=nodes, relations=relations)
+
+
+_TUTOR_EVENT_TYPES = {"tutor_explanation"}
+
+
+def filter_provenance(extraction: Extraction, events) -> tuple[Extraction, list[str]]:
+    """Drop preference/goal candidates whose support traces only to tutor speech (#4).
+
+    Concepts pass untouched. A pref/goal candidate is kept when any evidence
+    content substring-matches a learner-authored event; dropped when it matches
+    only tutor events, or when nothing matches and the batch has no learner
+    events at all. Untraceable evidence in a batch that does contain learner
+    events gets the benefit of the doubt (extractors paraphrase).
+    """
+    learner_texts = [(e.text or "").casefold() for e in events
+                     if e.type not in _TUTOR_EVENT_TYPES]
+    tutor_texts = [(e.text or "").casefold() for e in events
+                   if e.type in _TUTOR_EVENT_TYPES]
+    kept: list[ExtractedNode] = []
+    dropped: list[str] = []
+    for n in extraction.nodes:
+        if n.type not in ("preference", "goal"):
+            kept.append(n)
+            continue
+        contents = [c for c in ((ev.content or "").casefold() for ev in n.evidence) if c]
+        in_learner = any(any(c in lt for lt in learner_texts) for c in contents)
+        in_tutor = any(any(c in tt for tt in tutor_texts) for c in contents)
+        if in_learner or (not in_tutor and learner_texts):
+            kept.append(n)
+        else:
+            dropped.append(n.label)
+    return Extraction(nodes=kept, relations=extraction.relations), dropped

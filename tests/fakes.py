@@ -7,6 +7,7 @@ from contextlib import asynccontextmanager
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
+from engram.core.edges import edge_rank
 from engram.core.models import (
     Completion,
     Edge,
@@ -167,12 +168,18 @@ class FakeStorage:
             out[nid] = evs[:per_node]
         return out
 
-    async def get_pending_events(self, learner_id: str) -> list[LearningEvent]:
-        return [
+    async def get_pending_events(
+        self, learner_id: str, *, limit: int | None = None
+    ) -> list[LearningEvent]:
+        evs = [
             e
             for e in self.events
             if e.learner_id == learner_id and e.consolidated_at is None
         ]
+        evs.sort(key=lambda e: e.ts)
+        if limit is not None:
+            evs = evs[-limit:]
+        return evs
 
     async def get_events(
         self, learner_id: str, limit: int = 200
@@ -220,6 +227,11 @@ class FakeStorage:
             e.source_id = rid(e.source_id)
             e.target_id = rid(e.target_id)
             self.edges.append(e)
+        for upd in plan.edge_updates:
+            for e in self.edges:
+                if e.id == upd.id:
+                    e.type, e.weight = upd.type, upd.weight
+                    e.source_id, e.target_id = upd.source_id, upd.target_id
         for ev in plan.new_evidence:
             ev.id = ev.id or self._next_id()
             ev.node_id = rid(ev.node_id)
@@ -230,6 +242,7 @@ class FakeStorage:
                 existing.mastery = upd.mastery
                 existing.confidence = upd.confidence
                 existing.salience = upd.salience
+                existing.importance = upd.importance
                 existing.last_seen_at = upd.last_seen_at
                 existing.forgotten_at = upd.forgotten_at
         for mp in plan.mastery_history:
@@ -255,6 +268,55 @@ class FakeStorage:
             for e in self.events:
                 if e.id in ids:
                     e.consolidated_at = stamp
+
+    async def merge_nodes(self, learner_id, keep_id, drop_id, *, mastery,
+                          confidence, salience, importance, rationale) -> None:
+        for ev in self.evidence:
+            if ev.node_id == drop_id:
+                ev.node_id = keep_id
+        for e in self.edges:
+            if e.source_id == drop_id:
+                e.source_id = keep_id
+            if e.target_id == drop_id:
+                e.target_id = keep_id
+        self.edges = [e for e in self.edges
+                      if not (e.learner_id == learner_id and e.source_id == e.target_id)]
+        best: dict[frozenset, Edge] = {}
+        rest: list[Edge] = []
+        dropped_bits: list[str] = []
+        for e in self.edges:
+            if e.learner_id != learner_id:
+                rest.append(e)
+                continue
+            if keep_id not in (e.source_id, e.target_id):
+                rest.append(e)
+                continue
+            key = frozenset((e.source_id, e.target_id))
+            cur = best.get(key)
+            e_key = (edge_rank(e.type), e.weight, e.id or "")
+            if cur is None:
+                best[key] = e
+            else:
+                c_key = (edge_rank(cur.type), cur.weight, cur.id or "")
+                if e_key > c_key:
+                    dropped_bits.append(f"{cur.type.value}@{cur.weight:.2f}")
+                    best[key] = e
+                else:
+                    dropped_bits.append(f"{e.type.value}@{e.weight:.2f}")
+        self.edges = rest + list(best.values())
+        keep = self.nodes[keep_id]
+        keep.mastery, keep.confidence = mastery, confidence
+        keep.salience, keep.importance = salience, importance
+        self.nodes[drop_id].forgotten_at = datetime.now(timezone.utc)
+        audit = rationale
+        if dropped_bits:
+            audit = f"{rationale}; dropped duplicate edges: {', '.join(dropped_bits)}"
+        self._audit_seq += 1
+        self._audit_rows.append({
+            "id": str(self._audit_seq), "learner_id": learner_id, "op": "merge",
+            "rationale": audit, "model": None, "tokens": None, "cost": None,
+            "ts": _AUDIT_BASE + timedelta(microseconds=self._audit_seq),
+        })
 
     async def get_audit(self, learner_id: str, since=None, limit: int = 100) -> list[dict]:
         rows = [

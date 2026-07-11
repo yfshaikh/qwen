@@ -8,7 +8,7 @@ New nodes carry temp ids remapped at commit. The planner never writes to the DB.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime, timezone
 
 from engram.core.consolidation import (
@@ -17,16 +17,21 @@ from engram.core.consolidation import (
     ConsolidationReport,
     MasteryPoint,
 )
+from engram.core.edges import edge_rank
 from engram.core.extraction import (
     EXTRACTION_SCHEMA,
     Extraction,
     ExtractionError,
     build_extraction_messages,
+    filter_provenance,
     parse_extraction,
 )
 from engram.core.mastery import decay_salience, ewma, observation_for, update_confidence
 from engram.core.models import Edge, EdgeType, Evidence, EvidenceKind, Message, Node, NodeType
 from engram.core.recall import cosine_similarity
+from engram.core.text import normalize_label, token_jaccard
+
+_JACCARD_MERGE = 0.8  # ponytail: fixed; promote to KeeperParams if a sweep ever tunes it
 
 
 def _utcnow() -> datetime:
@@ -83,12 +88,16 @@ class Keeper:
 
     async def _plan(self, learner_id: str, events) -> ConsolidationPlan:
         extraction = await self._extract(events)
+        extraction, dropped = filter_provenance(extraction, events)
         live = await self.storage.get_live_nodes(learner_id)
         now = self.clock()
 
         plan = ConsolidationPlan(
             learner_id=learner_id, processed_event_ids=[e.id for e in events]
         )
+        for label in dropped:
+            plan.audit.append(AuditEntry(
+                op="link", rationale=f"dropped {label!r}: tutor-only provenance"))
         work: dict[str, _Work] = {n.id: _Work(node=n) for n in live if n.id}
 
         cand_vecs = (
@@ -113,6 +122,7 @@ class Keeper:
                     mastery=None,
                     confidence=0.3,
                     salience=1.0,
+                    importance=cand.importance,
                     embedding=list(vec),
                     last_seen_at=now,
                 )
@@ -123,13 +133,52 @@ class Keeper:
             self._apply_evidence(cand, target_id, work, plan)
             work[target_id].touched = True
 
+        real_ids = [nid for nid in work if not nid.startswith("tmp-")]
+        existing_edges = await self.storage.get_edges(learner_id, real_ids) if real_ids else []
+        # Working copies — never mutate storage-owned Edge objects in place.
+        by_pair: dict[frozenset, Edge] = {}
+        for e in existing_edges:
+            by_pair.setdefault(frozenset((e.source_id, e.target_id)), replace(e))
+        pending_updates: dict[str, Edge] = {}
+        bumped: set[str] = set()
+        proposed: dict[frozenset, Edge] = {}
         for rel in extraction.relations:
             s = label_to_id.get(rel.source_label)
             t = label_to_id.get(rel.target_label)
-            if s and t:
-                plan.new_edges.append(
-                    Edge(learner_id=learner_id, source_id=s, target_id=t, type=EdgeType(rel.type))
-                )
+            if not s or not t or s == t:
+                continue
+            new_type = EdgeType(rel.type)
+            key = frozenset((s, t))
+            ex = by_pair.get(key)
+            if ex is not None:  # edge already in the graph (either direction)
+                changed = False
+                if ex.type == new_type:
+                    if ex.weight < 1.0 and ex.id not in bumped:
+                        ex.weight = min(1.0, ex.weight + 0.1)
+                        bumped.add(ex.id or "")
+                        changed = True
+                elif edge_rank(new_type) > edge_rank(ex.type):
+                    plan.audit.append(AuditEntry(
+                        op="link",
+                        rationale=f"upgraded {ex.type.value}->{new_type.value} "
+                                  f"{rel.source_label}->{rel.target_label}"))
+                    ex.type = new_type
+                    ex.source_id, ex.target_id = s, t  # adopt proposal direction
+                    changed = True
+                # weaker or equal-rank different type: keep what we have
+                if changed and ex.id:
+                    pending_updates[ex.id] = ex
+                continue
+            dup = proposed.get(key)
+            if dup is not None:  # proposed twice in this batch
+                if edge_rank(new_type) > edge_rank(dup.type):
+                    dup.type = new_type
+                    dup.source_id, dup.target_id = s, t
+                continue
+            edge = Edge(learner_id=learner_id, source_id=s, target_id=t, type=new_type)
+            proposed[key] = edge
+            plan.new_edges.append(edge)
+        plan.edge_updates.extend(pending_updates.values())
 
         self._decay_and_snapshot(work, now, plan)
         plan.audit.append(
@@ -150,10 +199,30 @@ class Keeper:
             return parse_extraction(out.text or "")  # may raise -> consolidate aborts
 
     async def _resolve(self, cand, vec, work, plan) -> str | None:
-        """Return an existing node id to attach to, or None to create new."""
+        """Return an existing node id to attach to, or None to create new.
+
+        Merge when normalized labels are equal or token-Jaccard >= 0.8 (lexical —
+        applies to same-batch tmp nodes too), else cosine >= tau_high, else send
+        the tau_low..tau_high band to the reflector. Never merges across
+        NodeType (goal ≠ concept). (#6)
+        """
+        cand_type = NodeType(cand.type)
+        cand_norm = normalize_label(cand.label)
+        if cand_norm:
+            for nid, w in work.items():
+                if w.node.type != cand_type:
+                    continue
+                if cand_norm == normalize_label(w.node.label) or \
+                        token_jaccard(cand.label, w.node.label) >= _JACCARD_MERGE:
+                    plan.audit.append(AuditEntry(
+                        op="merge",
+                        rationale=f"merged {cand.label!r} into {w.node.label!r} (label match)"))
+                    return nid
         best_id, best_sim = None, -1.0
         for nid, w in work.items():
             if nid.startswith("tmp-") or not w.node.embedding:
+                continue
+            if w.node.type != cand_type:
                 continue
             sim = cosine_similarity(vec, w.node.embedding)
             if sim > best_sim:
@@ -195,6 +264,8 @@ class Keeper:
                     importance=ev.importance,
                 )
             )
+            if ev.importance is not None:
+                node.importance = ewma(node.importance, ev.importance, self.p.ewma_alpha)
             obs = observation_for(ev.kind, ev.correct, ev.mastery)
             if obs is None:
                 continue
@@ -237,3 +308,59 @@ class Keeper:
             merged=sum(1 for a in plan.audit if a.op == "merge"),
             forgotten=sum(1 for n in plan.node_updates if n.forgotten_at is not None),
         )
+
+    async def repair_merges(self, learner_id: str) -> dict:
+        """Retroactive dedup sweep over the live graph (#6 layer 3). Applies the
+        same combined merge score as _resolve; keeps the older node id; merged
+        fields: mastery from the higher-confidence node, max confidence/salience/
+        importance. Re-reads after each merge — graphs are small.
+        # ponytail: O(n^2) pair scan per pass; vector-search top-k if graphs grow.
+        """
+        async with self.storage.consolidation_lock(learner_id) as acquired:
+            if not acquired:
+                return {"merged": 0, "pairs": [], "skipped": True}
+            pairs: list[str] = []
+            rejected: set[frozenset[str]] = set()  # reflector-no pairs, persist across passes
+            while True:
+                live = await self.storage.get_live_nodes(learner_id)
+                found = await self._find_dup_pair(live, rejected)
+                if found is None:
+                    break
+                keep, drop = found
+                hi = keep if (keep.confidence or 0.0) >= (drop.confidence or 0.0) else drop
+                await self.storage.merge_nodes(
+                    learner_id, keep.id, drop.id,
+                    mastery=hi.mastery,
+                    confidence=max(keep.confidence or 0.0, drop.confidence or 0.0),
+                    salience=max(keep.salience or 0.0, drop.salience or 0.0),
+                    importance=(max(keep.importance or 0.0, drop.importance or 0.0)
+                                if keep.importance is not None or drop.importance is not None
+                                else None),
+                    rationale=f"repair: merged {drop.label!r} into {keep.label!r}",
+                )
+                pairs.append(f"{drop.label!r} -> {keep.label!r}")
+            return {"merged": len(pairs), "pairs": pairs, "skipped": False}
+
+    async def _find_dup_pair(self, live, rejected: set[frozenset[str]]) -> tuple | None:
+        """First (keep, drop) duplicate pair by the combined score, or None."""
+        for i, a in enumerate(live):
+            for b in live[i + 1:]:
+                if a.type != b.type:
+                    continue
+                pair_key = frozenset((a.id, b.id))
+                if pair_key in rejected:
+                    continue
+                lexical = (normalize_label(a.label)
+                           and normalize_label(a.label) == normalize_label(b.label)) \
+                    or token_jaccard(a.label, b.label) >= _JACCARD_MERGE
+                cos = (cosine_similarity(a.embedding, b.embedding)
+                       if a.embedding and b.embedding else 0.0)
+                same = lexical or cos >= self.p.tau_high
+                if not same and self.p.tau_low < cos < self.p.tau_high:
+                    same = await self._reflector_confirm(a, b)
+                    if not same:
+                        rejected.add(pair_key)
+                if same:
+                    keep, drop = (a, b) if a.created_at <= b.created_at else (b, a)
+                    return keep, drop
+        return None

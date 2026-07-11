@@ -67,12 +67,26 @@ class StoragePort(Protocol):
     ) -> list[LearningEvent]: ...
 
     # consolidation (Phase 2)
-    async def get_pending_events(self, learner_id: str) -> list[LearningEvent]: ...
+    async def get_pending_events(
+        self, learner_id: str, *, limit: int | None = None
+    ) -> list[LearningEvent]: ...
     async def get_live_nodes(self, learner_id: str) -> list[Node]: ...
     def consolidation_lock(
         self, learner_id: str
     ) -> AbstractAsyncContextManager[bool]: ...
     async def apply_consolidation(self, plan: ConsolidationPlan) -> None: ...
+    async def merge_nodes(
+        self,
+        learner_id: str,
+        keep_id: str,
+        drop_id: str,
+        *,
+        mastery: float | None,
+        confidence: float | None,
+        salience: float | None,
+        importance: float | None,
+        rationale: str,
+    ) -> None: ...
     async def get_audit(
         self, learner_id: str, since: Any = None, limit: int = 100
     ) -> list[dict]: ...

@@ -56,6 +56,7 @@ class Node:
     mastery: float | None = None
     confidence: float | None = None
     salience: float | None = None
+    importance: float | None = None
     embedding: list[float] | None = None
     source_refs: list[Any] = field(default_factory=list)
     forgotten_at: datetime | None = None

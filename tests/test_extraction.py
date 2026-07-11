@@ -80,3 +80,19 @@ def test_build_messages_includes_events_and_signals():
     assert msgs[0].role == "system"
     blob = msgs[-1].content
     assert "quiz_result" in blob and "correct" in blob
+
+
+def test_parse_extraction_reads_concept_importance():
+    from engram.core.extraction import parse_extraction
+    out = parse_extraction(
+        '{"concepts": [{"label": "Flux", "summary": "s", "importance": 0.8,'
+        ' "evidence": []}], "preferences": [], "goals": [], "relations": []}')
+    assert out.nodes[0].importance == 0.8
+
+
+def test_parse_extraction_coerces_bad_importance_to_none():
+    from engram.core.extraction import parse_extraction
+    out = parse_extraction(
+        '{"concepts": [{"label": "Flux", "summary": "s", "importance": "high",'
+        ' "evidence": []}], "preferences": [], "goals": [], "relations": []}')
+    assert out.nodes[0].importance is None

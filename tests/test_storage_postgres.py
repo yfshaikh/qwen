@@ -49,7 +49,8 @@ async def test_node_edge_evidence_and_reads(database_url):
         learner = f"t-{uuid.uuid4()}"
         a = await storage.insert_node(
             Node(learner_id=learner, type=NodeType.CONCEPT, label="A",
-                 summary="alpha", mastery=0.7, salience=0.9, embedding=_vec(1, 0))
+                 summary="alpha", mastery=0.7, salience=0.9, importance=0.5,
+                 embedding=_vec(1, 0))
         )
         b = await storage.insert_node(
             Node(learner_id=learner, type=NodeType.CONCEPT, label="B",
@@ -73,6 +74,9 @@ async def test_node_edge_evidence_and_reads(database_url):
 
         nodes = await storage.get_nodes(learner, [b])
         assert [n.label for n in nodes] == ["B"]
+
+        live_a = next(n for n in await storage.get_live_nodes(learner) if n.id == a)
+        assert live_a.importance == 0.5
 
         ev = await storage.top_evidence([a], per_node=2)
         assert ev[a][0].content == "ok"

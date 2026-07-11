@@ -37,6 +37,7 @@ class ConsolidationPlan:
     new_nodes: list[Node] = field(default_factory=list)        # id is a temp "tmp-N"
     node_updates: list[Node] = field(default_factory=list)     # existing real id
     new_edges: list[Edge] = field(default_factory=list)        # ids temp or real
+    edge_updates: list[Edge] = field(default_factory=list)     # existing real id; type/weight changed
     new_evidence: list[Evidence] = field(default_factory=list)  # node_id temp or real
     mastery_history: list[MasteryPoint] = field(default_factory=list)
     audit: list[AuditEntry] = field(default_factory=list)
