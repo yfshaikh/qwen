@@ -36,3 +36,43 @@ def test_missing_probes_raises(tmp_path):
     p.write_text("id: x\npersona: y\nsessions: []\n")
     with pytest.raises(ValueError, match="probes"):
         load_scenario(p)
+
+
+def _write(tmp_path, text):
+    p = tmp_path / "s.yaml"
+    p.write_text(text)
+    return p
+
+BASE = """
+id: t
+probes: [{query: q, expect_nodes: [X]}]
+"""
+
+def test_scenario_v2_gap_days_and_checks(tmp_path):
+    p = _write(tmp_path, BASE + """
+sessions:
+  - intent: first
+    turns: 1
+  - intent: later
+    gap_days: 30
+checks:
+  - dedup
+  - name: lifecycle
+    expect: {forgotten: [Old], kept: [Fresh]}
+    threshold: 0.1
+""")
+    sc = load_scenario(p)
+    assert sc.sessions[0].gap_days == 0.0
+    assert sc.sessions[1].gap_days == 30.0
+    assert [c.name for c in sc.checks] == ["dedup", "lifecycle"]
+    assert sc.checks[0].params == {}
+    assert sc.checks[1].params == {"expect": {"forgotten": ["Old"], "kept": ["Fresh"]},
+                                   "threshold": 0.1}
+
+def test_scenario_v2_defaults_backcompat(tmp_path):
+    sc = load_scenario(_write(tmp_path, BASE + "sessions: [{intent: a}]\n"))
+    assert sc.checks == [] and sc.sessions[0].gap_days == 0.0
+
+def test_scenario_v2_negative_gap_rejected(tmp_path):
+    with pytest.raises(ValueError):
+        load_scenario(_write(tmp_path, BASE + "sessions: [{intent: a, gap_days: -1}]\n"))

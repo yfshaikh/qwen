@@ -15,9 +15,16 @@ class Probe:
 
 
 @dataclass(slots=True)
+class CheckSpec:
+    name: str
+    params: dict = field(default_factory=dict)
+
+
+@dataclass(slots=True)
 class Session:
     intent: str
     turns: int = 3
+    gap_days: float = 0.0
 
 
 @dataclass(slots=True)
@@ -27,6 +34,7 @@ class Scenario:
     hidden_state: dict
     sessions: list[Session]
     probes: list[Probe]
+    checks: list[CheckSpec] = field(default_factory=list)
 
 
 def load_scenario(path: str | Path) -> Scenario:
@@ -35,12 +43,27 @@ def load_scenario(path: str | Path) -> Scenario:
         raise ValueError("scenario missing required field: id")
     if not data.get("probes"):
         raise ValueError("scenario missing required field: probes")
-    sessions = [Session(intent=s["intent"], turns=int(s.get("turns", 3)))
-                for s in data.get("sessions", [])]
+    sessions = []
+    for s in data.get("sessions", []):
+        gap = float(s.get("gap_days", 0.0))
+        if gap < 0:
+            raise ValueError("gap_days must be >= 0")
+        sessions.append(Session(intent=s["intent"], turns=int(s.get("turns", 3)),
+                                gap_days=gap))
+    checks = []
+    for c in data.get("checks", []) or []:
+        if isinstance(c, str):
+            checks.append(CheckSpec(name=c))
+        else:
+            c = dict(c)
+            name = c.pop("name", None)
+            if not name:
+                raise ValueError("check entry missing 'name'")
+            checks.append(CheckSpec(name=name, params=c))
     probes = [Probe(query=p["query"],
                     expect_nodes=list(p.get("expect_nodes", [])),
                     mastered_not_expected=list(p.get("mastered_not_expected", [])))
               for p in data["probes"]]
     return Scenario(id=data["id"], persona=data.get("persona", ""),
                     hidden_state=data.get("hidden_state", {}),
-                    sessions=sessions, probes=probes)
+                    sessions=sessions, probes=probes, checks=checks)
