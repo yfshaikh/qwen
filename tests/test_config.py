@@ -94,3 +94,8 @@ def test_audit_settings(monkeypatch):
     s2 = _settings(monkeypatch, ENGRAM_AUDIT_POLL_SECONDS="0.5", ENGRAM_AUDIT_PAGE_LIMIT="50")
     assert s2.audit_poll_seconds == 0.5
     assert s2.audit_page_limit == 50
+
+
+def test_recall_session_buffer_default_on(monkeypatch):
+    s = _settings(monkeypatch)
+    assert s.recall_session_buffer is True

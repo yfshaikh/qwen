@@ -32,6 +32,10 @@ class RecallWeights:
     relevance: float = 0.4
 
 
+_NEEDS_ATTENTION = 0.4  # mastery below this leads the text_block (#2)
+_BUFFER_N = 6  # last N signal-bearing pending events shown to the tutor (#1)
+
+
 class Recall:
     def __init__(
         self,
@@ -43,6 +47,7 @@ class Recall:
         hops: int = 2,
         fanout: int = 10,
         per_node_evidence: int = 2,
+        session_buffer: bool = True,
     ) -> None:
         self.storage = storage
         self.embedder = embedder
@@ -52,6 +57,7 @@ class Recall:
         self.hops = hops
         self.fanout = fanout
         self.per_node_evidence = per_node_evidence
+        self.session_buffer = session_buffer
 
     async def run(self, learner_id: str, query: str, budget: int) -> RecallResult:
         if not query.strip():
@@ -65,7 +71,18 @@ class Recall:
         )
 
         scored = self._score(query_vec, nodes_by_id, ev_map)
-        return self._fill(scored, edges, ev_map, budget)
+        result = self._fill(scored, edges, ev_map, budget)
+        if self.session_buffer:
+            remaining = budget - self.token_count(result.text_block)
+            # Bound the hot-path fetch: buffer only keeps last _BUFFER_N
+            # signal-bearing events; over-fetch a little for non-signal noise.
+            pending = await self.storage.get_pending_events(
+                learner_id, limit=_BUFFER_N * 8)
+            tail = self._session_buffer_block(pending, remaining)
+            if tail:
+                joined = f"{result.text_block}\n{tail}" if result.text_block else tail
+                result.text_block = joined
+        return result
 
     async def _expand(
         self, learner_id: str, seeds: list[Node]
@@ -110,7 +127,11 @@ class Recall:
             )
             recency = node.salience or 0.0
             evs = ev_map.get(nid, [])
-            importance = max((e.importance or 0.0 for e in evs), default=0.0)
+            if node.importance is not None:
+                importance = node.importance
+            else:
+                imps = [e.importance for e in evs if e.importance is not None]
+                importance = max(imps) if imps else 0.3  # neutral prior for old graphs
             score = (
                 self.w.recency * recency
                 + self.w.importance * importance
@@ -128,16 +149,22 @@ class Recall:
         ev_map: dict[str, list[Evidence]],
         budget: int,
     ) -> RecallResult:
+        header = "Needs attention:"
+        weak_lines: list[str] = []
         lines: list[str] = []
         chosen: list[tuple[float, Node, dict[str, float]]] = []
         used = 0
         for score, node, sub in scored:
-            block = self._format_node(node, ev_map.get(node.id or "", []))
+            evs = ev_map.get(node.id or "", [])
+            weak = node.mastery is not None and node.mastery < _NEEDS_ATTENTION
+            block = self._format_weak_node(node, evs) if weak else self._format_node(node, evs)
             cost = self.token_count(block)
+            if weak and not weak_lines:
+                cost += self.token_count(header)
             if used + cost > budget:
                 break
             used += cost
-            lines.append(block)
+            (weak_lines if weak else lines).append(block)
             chosen.append((score, node, sub))
 
         # If nothing fit but candidates exist, surface the top node in the
@@ -159,10 +186,42 @@ class Recall:
             for e in edges
             if e.source_id in included_ids and e.target_id in included_ids
         ]
+        parts = ([header] + weak_lines if weak_lines else []) + lines
         return RecallResult(
-            text_block="\n".join(lines),
+            text_block="\n".join(parts),
             subgraph={"nodes": sub_nodes, "edges": sub_edges},
         )
+
+    def _session_buffer_block(self, events, remaining: int) -> str:
+        """Trailing 'this session' section from un-consolidated events. Pure string
+        work — no LLM. Included inside the budget; truncated oldest-first (#1)."""
+        def signal_bearing(e) -> bool:
+            if e.type in ("quiz_result", "note"):
+                return True
+            return e.type == "utterance" and bool(e.signals)
+
+        sig = [e for e in events if signal_bearing(e)][-_BUFFER_N:]
+        if not sig or remaining <= 0:
+            return ""
+        header = "This session (not yet consolidated):"
+        lines = []
+        for e in sig:
+            bits = (e.text or "").strip().replace("\n", " ")[:100]
+            notes = ", ".join(f"{k}={v}" for k, v in sorted((e.signals or {}).items()))
+            if notes:
+                bits += f" [{notes}]"
+            lines.append(f"  • {e.type}: {bits}")
+        while lines and self.token_count("\n".join([header] + lines)) > remaining:
+            lines.pop(0)
+        return "\n".join([header] + lines) if lines else ""
+
+    @staticmethod
+    def _format_weak_node(node: Node, evs: list[Evidence]) -> str:
+        line = f"- {node.label} (mastery {node.mastery:.0%})"
+        snippet = next((e.content for e in evs if e.content), None)
+        if snippet:
+            line += f" — {snippet}"
+        return line
 
     @staticmethod
     def _format_node(node: Node, evs: list[Evidence]) -> str:
@@ -190,6 +249,7 @@ class Recall:
             "mastery": node.mastery,
             "confidence": node.confidence,
             "salience": node.salience,
+            "importance": node.importance,
             "score": score,
             "scores": sub,
             "evidence": [

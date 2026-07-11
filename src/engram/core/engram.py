@@ -94,6 +94,7 @@ class Engram:
             recall = Recall(
                 self.storage, self.embedder, self._token_count, weights,
                 seed_k=s.recall_seed_k, hops=s.recall_hops, fanout=s.recall_fanout,
+                session_buffer=s.recall_session_buffer,
             )
             budget = budget if budget is not None else s.recall_default_budget
         else:
@@ -120,6 +121,25 @@ class Engram:
             params = KeeperParams()
         keeper = Keeper(self.storage, self.llm, self.embedder, params, clock=self._now)
         return await keeper.consolidate(learner_id)
+
+    async def repair_merges(self, learner_id: str) -> dict:
+        """Retroactively merge duplicate nodes in an existing graph (#6)."""
+        from engram.core.keeper import Keeper, KeeperParams
+
+        s = self.settings
+        if s is not None:
+            params = KeeperParams(
+                tau_high=s.keeper_tau_high,
+                tau_low=s.keeper_tau_low,
+                ewma_alpha=s.keeper_ewma_alpha,
+                salience_bump=s.keeper_salience_bump,
+                prune_floor=s.keeper_prune_floor,
+                decay=s.recall_decay,
+            )
+        else:
+            params = KeeperParams()
+        keeper = Keeper(self.storage, self.llm, self.embedder, params, clock=self._now)
+        return await keeper.repair_merges(learner_id)
 
     async def audit(self, learner_id: str, since: Any = None, limit: int = 100) -> list[dict]:
         return await self.storage.get_audit(learner_id, since, limit)

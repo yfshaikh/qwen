@@ -67,3 +67,13 @@ async def test_turn_empty_reply_saves_only_utterance():
     assert [e["type"] for e in saved["events"]] == ["utterance"]  # no empty tutor_explanation
     assert [e.type for e in eng.storage.events] == ["utterance"]
     assert frames[-1][1]["reply"] == ""
+
+
+def test_system_prefix_directs_needs_attention():
+    from engram.tutor.prompt import SYSTEM_PREFIX
+    assert "Needs attention" in SYSTEM_PREFIX
+
+
+def test_voice_system_directs_needs_attention():
+    from engram.voice.prompt import SYSTEM
+    assert "Needs attention" in SYSTEM

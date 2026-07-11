@@ -8,7 +8,8 @@ from engram.core.models import Message
 SYSTEM_PREFIX = (
     "You are a concise, encouraging tutor. Personalize using what you remember "
     "about the learner; don't re-explain what they already know. If memory is "
-    "empty, teach normally."
+    "empty, teach normally. If the memory block lists 'Needs attention' concepts "
+    "relevant to the question, address the weakest first before advancing."
 )
 
 

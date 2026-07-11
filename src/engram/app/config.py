@@ -51,6 +51,7 @@ class Settings(BaseSettings):
     recall_hops: int = Field(default=2, alias="ENGRAM_RECALL_HOPS")
     recall_fanout: int = Field(default=10, alias="ENGRAM_RECALL_FANOUT")
     recall_default_budget: int = Field(default=800, alias="ENGRAM_RECALL_DEFAULT_BUDGET")
+    recall_session_buffer: bool = Field(default=True, alias="ENGRAM_RECALL_SESSION_BUFFER")
 
     # Keeper / consolidation (spec §3.6); env-overridable for eval sweeps.
     keeper_tau_high: float = Field(default=0.86, alias="ENGRAM_KEEPER_TAU_HIGH")
