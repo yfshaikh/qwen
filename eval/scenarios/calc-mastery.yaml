@@ -22,3 +22,8 @@ probes:
   - query: "quiz me on limits"
     expect_nodes: [Limit]
     mastered_not_expected: [Continuity]
+checks:
+  - recall_probes
+  - dedup
+  - importance
+  - integrity

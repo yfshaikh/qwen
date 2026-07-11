@@ -1,9 +1,11 @@
-"""CLI for the eval harness:  python -m engram.eval <gen|sweep|demo|report> ...
+"""CLI for the eval harness:  python -m engram.eval <gen|sweep|demo|report|run> ...
 
 gen     <scenario.yaml>                       -> writes eval/fixtures/<id>.json
 sweep   <scenario.yaml> <fixture.json> --grid <grid.yaml>  -> Tier-1 sweep report
 demo    <scenario.yaml> <fixture.json>        -> ON vs baseline headline
 report  <results.json>                        -> re-render a saved sweep result
+run     <scenario.yaml> [--checks a,b] [--budget-usd F] [--against R] [--tolerance F]
+        -> execute a scenario run, apply checks, compare to a baseline
 """
 from __future__ import annotations
 
@@ -76,6 +78,54 @@ async def _demo(args) -> None:
         await eng.aclose()
 
 
+async def _run(args) -> None:
+    from engram.eval import runs as run_store
+    from engram.eval.clock import SimClock
+    from engram.eval.regression import compare, flatten_metrics
+    from engram.eval.runner import execute_run
+
+    eng = Engram.from_env()
+    await eng.connect()
+    try:
+        sc = load_scenario(args.scenario)
+        _, run_dir = run_store.new_run(sc.id)
+        checks = args.checks.split(",") if args.checks else None
+        data = await execute_run(
+            eng, sc, run_dir, checks=checks, max_cost_usd=args.budget_usd,
+            clock=SimClock(), emit=lambda e: run_store.append_event(run_dir, e))
+        for c in data["checks"]:
+            mark = "PASS" if c["passed"] else "FAIL"
+            print(f"[{mark}] {c['name']}  {c['metrics']}")
+            for d in (c["details"] or [])[:5]:
+                print(f"       - {d}")
+        print(f"status={data['status']}  cost=${data['cost']['usd']:.4f}  dir={run_dir}")
+        failed = data["status"] != "passed"
+        if args.against:
+            base = run_store.read_run(_resolve_run_dir(args.against))
+            regs = compare(flatten_metrics(data), flatten_metrics(base), args.tolerance)
+            if not regs and not (flatten_metrics(data).keys() & flatten_metrics(base).keys()):
+                print("WARNING: no shared metrics with baseline; regression compare is a no-op")
+            for r in regs:
+                print(f"REGRESSION {r['metric']}: {r['current']} vs baseline {r['baseline']}")
+            failed = failed or bool(regs)
+        raise SystemExit(1 if failed else 0)
+    finally:
+        await eng.aclose()
+
+
+def _resolve_run_dir(ref: str) -> Path:
+    p = Path(ref)
+    if p.is_file() and p.name == "run.json":
+        return p.parent
+    if p.is_dir():
+        return p
+    hits = [d for d in Path("eval/runs").rglob("run.json") if d.parent.name.endswith(ref)]
+    if len(hits) != 1:
+        raise SystemExit(f"--against {ref!r}: {'ambiguous' if hits else 'not found'}: "
+                         f"{[str(h.parent) for h in hits]}")
+    return hits[0].parent
+
+
 def _report(args) -> None:
     data = json.loads(Path(args.results).read_text())
     print(report.render_markdown(data["rows"], target=data.get("target", "node_hit_rate"),
@@ -97,6 +147,12 @@ def main() -> None:
     d.add_argument("fixture")
     r = sub.add_parser("report")
     r.add_argument("results")
+    rn = sub.add_parser("run")
+    rn.add_argument("scenario")
+    rn.add_argument("--checks")
+    rn.add_argument("--budget-usd", type=float, default=None)
+    rn.add_argument("--against")
+    rn.add_argument("--tolerance", type=float, default=0.0)
     args = ap.parse_args()
     if args.cmd == "gen":
         asyncio.run(_gen(args))
@@ -106,6 +162,8 @@ def main() -> None:
         asyncio.run(_demo(args))
     elif args.cmd == "report":
         _report(args)
+    elif args.cmd == "run":
+        asyncio.run(_run(args))
 
 
 if __name__ == "__main__":

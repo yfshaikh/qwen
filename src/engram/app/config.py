@@ -69,6 +69,11 @@ class Settings(BaseSettings):
     deepgram_tts_model: str = Field(default="aura-2-thalia-en", alias="DEEPGRAM_TTS_MODEL")
     deepgram_language: str | None = Field(default=None, alias="DEEPGRAM_LANGUAGE")
 
+    # Eval harness (spec: eval-harness-v2)
+    eval_ui: bool = Field(default=False, alias="ENGRAM_EVAL_UI")
+    eval_price_in_per_m: float = Field(default=0.0, alias="ENGRAM_EVAL_PRICE_IN_PER_M")
+    eval_price_out_per_m: float = Field(default=0.0, alias="ENGRAM_EVAL_PRICE_OUT_PER_M")
+
     def model_for(self, role: str) -> str:
         table = {
             "tutor": self.model_tutor,

@@ -75,50 +75,107 @@ rebuilding the graph:
 | `metrics.py` | deterministic aggregation + LLM judge |
 | `sweep.py` | grid expansion, Tier-1 runner, Tier-2 rebuild helper |
 | `report.py` | markdown table + CSV + headline line |
-| `__main__.py` | CLI: `gen` / `sweep` / `demo` / `report` |
+| `runner.py` | run orchestration: run-scoped Engram, sim clock, sessions → checks |
+| `runs.py` | filesystem run store (`eval/runs/<id>/`: run.json, events, snapshots) |
+| `checks/` | pluggable checks (one file each) registered via `registry.py` |
+| `regression.py` | metric-direction-aware compare of a run vs a baseline |
+| `__main__.py` | CLI: `gen` / `sweep` / `demo` / `report` / `run` |
 
 ## Current status
 
-The `calc-mastery` scenario is a **working smoke test**: `gen`, `sweep`, and `demo`
-all run end-to-end and produce sensible output. It is **not yet a discriminating
-tuning scenario** — see below.
+The `calc-mastery` scenario runs end-to-end through every verb — `gen`, `sweep`,
+`demo`, and the v2 `run` verb (multi-session, sim-clock lifecycle + the check
+suite). It is now a **multi-session scenario** (a mastered concept established
+early and probed late) rather than the original single-session smoke test, so
+recall and behavior have room to discriminate. Regression gating against a
+committed baseline is wired via `run --against` (see below).
+
+## Runs, checks & UI (v2)
+
+The `run` verb is the CI-facing entry point. It executes a scenario against the
+live core (`Engram.from_env()`) on a **simulated clock**, drives each session
+(honoring per-session `gap_days` time gaps so decay/prune math advances), then
+applies the scenario's **checks** and writes a full record under
+`eval/runs/<scenario>-<id>/` (`run.json`, `events.jsonl`, `transcript.jsonl`,
+`snapshots/`). Every run uses a throwaway `eval:<scenario>:run-<id>` learner that
+is deleted afterward.
+
+```
+python -m engram.eval run <scenario.yaml> \
+    [--checks recall_probes,dedup] \   # subset override (default: scenario's checks:)
+    [--budget-usd 0.50] \              # hard cost cap (needs prices configured)
+    [--against <run-dir-or-id>] \      # regression-gate vs a baseline
+    [--tolerance 0.02]                 # slack in the worse direction only
+```
+
+It prints a `[PASS]`/`[FAIL]` line per check (with metrics and up to five
+`details`), then a `status=… cost=$… dir=…` summary line. **Exit code is 1** if
+the run status is not `passed` **or** any regression is found vs `--against`;
+otherwise 0.
+
+**The six checks** (each a file in `checks/`, registered by name):
+
+| Check | Measures |
+|---|---|
+| `recall_probes` | Do the scenario probes surface the expected nodes (`node_hit_rate`, `mean_rank`, `mastered_leak_rate`)? |
+| `dedup` | Are near-duplicate concepts merged, not fanned out (`duplicate_label_rate`)? |
+| `importance` | Do high-signal nodes rank above noise? |
+| `integrity` | Graph well-formedness (`integrity_failures`, `orphan_edges`). |
+| `lifecycle` | Do decay/prune transitions fire correctly over sim time (`lifecycle_failures`)? |
+| `behavior` | Live arm — does memory change tutor behavior (`on_re_explanation_rate` vs `baseline_re_explanation_rate`)? Spends LLM calls (`needs="live"`). |
+
+**Scenario YAML additions** (both optional, backward-compatible):
+
+```yaml
+sessions:
+  - intent: "…"
+    turns: 3
+    gap_days: 14        # advance the sim clock 14 days before this session
+checks:
+  - recall_probes        # bare name, or…
+  - name: dedup
+    threshold: 0.1       # …a mapping to pass params to the check
+```
+
+**Environment variables:**
+
+- `ENGRAM_EVAL_UI` (bool, default false) — enables the live run console/UI.
+- `ENGRAM_EVAL_PRICE_IN_PER_M` / `ENGRAM_EVAL_PRICE_OUT_PER_M` (float USD per 1M
+  tokens, default 0.0) — token prices used to meter run cost. `--budget-usd` can
+  only trip when these are set; otherwise cost stays $0 and the cap is a no-op
+  (the run emits a warning).
+
+**Regression gating (`--against`)** resolves its argument three ways: a `run.json`
+path, a run directory, or a run-id suffix matched under `eval/runs/` (including
+`eval/runs/baselines/`, which **is** committed while all other runs are
+gitignored). An ambiguous suffix errors and lists the matches. Comparison is
+**metric-direction-aware**: `regression.py`'s `LOWER_BETTER` set knows that
+`mean_rank`, `*_leak_rate`, `*_failures`, `orphan_edges`, `usd`, etc. should go
+**down** while hit rates should go **up**; `--tolerance` grants slack only in the
+worse direction. Metrics present in only one of the two runs are ignored (a fully
+disjoint metric set yields no regressions but prints a warning).
 
 ## Known limitations & future improvements
 
-Observed from the first real runs (4-node graph, ~5-turn replay):
+The v2 `run` verb + multi-session `calc-mastery` address the early
+discrimination/baseline/budget gaps. Remaining items:
 
-1. **Scenarios too small to discriminate.** On a 4-node graph every sweep config
-   tied at `node_hit_rate=1.0` — `seed_k`/`hops`/weights can't change which nodes
-   come back when there are so few. *Fix:* longer, multi-session scenarios that
-   build 15–30 nodes so recall must make choices.
-
-2. **The baseline only loses when facts scroll out of its window.** The naive
-   baseline is "the last-N raw turns" (N=10). On a short replay it contains the
-   whole conversation, so memory shows no `re_explanation_rate` gain. *Fix:*
-   multi-session arcs where a mastered concept / preference is established **early**
-   (beyond the last-N window) and probed **late** — the case the spec describes
-   ("session 3 must not re-explain what was mastered in session 1").
-
-3. **Tight recall budget for a real ranking signal.** With no budget pressure
-   everything fits, so `mean_rank` ordering never affects which nodes appear.
-   *Fix:* sweep `recall_default_budget` low (e.g. `[150, 400]`).
-
-4. **Determinism / sample size.** The behavior arm is a single run over a few
+1. **Determinism / sample size.** The behavior arm is a single run over a few
    turns and `temperature` is unset, so judge numbers wobble between runs. *Fix:*
    pin `temperature=0` for student/tutor/judge (deferred — it touches the shared
    LLM adapter and would also change the production tutor) and/or average N runs.
 
-5. **Scenario fidelity / student drift.** The LLM student can wander off the
+2. **Scenario fidelity / student drift.** The LLM student can wander off the
    seeded hidden state — in the first run the intended "concrete examples"
    preference surfaced as "active quizzing." *Fix:* make session intents
    explicitly voice the preference, or validate the generated fixture against the
    hidden state before committing it.
 
-6. **Tier-2 sweep not exposed.** `rebuild_graph_from_transcript` exists but the CLI
-   only runs Tier-1. *Fix:* add a `--tier 2` path to the `sweep` command.
-
-7. **No query-embedding cache across combos.** Each sweep combo re-embeds the same
+3. **No query-embedding cache across combos.** Each sweep combo re-embeds the same
    probe queries. Cheap to cache; minor cost today.
 
-8. **Optional third arm.** The spec notes a `mem0` baseline arm as benchmarked
+4. **Optional third arm.** The spec notes a `mem0` baseline arm as benchmarked
    prior art — not built.
+
+5. **Tier-2 sweep not exposed.** `rebuild_graph_from_transcript` exists but the CLI
+   only runs Tier-1. *Fix:* add a `--tier 2` path to the `sweep` command (spec 2).
