@@ -13,6 +13,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from engram.core.models import Edge, Evidence, Node, RecallResult
+from engram.core.ports import EmbedderPort, StoragePort
 from engram.core.tokens import TokenCounter
 
 
@@ -39,8 +40,8 @@ _BUFFER_N = 6  # last N signal-bearing pending events shown to the tutor (#1)
 class Recall:
     def __init__(
         self,
-        storage: Any,
-        embedder: Any,
+        storage: StoragePort,
+        embedder: EmbedderPort,
         token_count: TokenCounter,
         weights: RecallWeights,
         seed_k: int = 8,

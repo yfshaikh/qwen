@@ -105,7 +105,19 @@ class FakeStorage:
         self.nodes[n.id] = n
         return n.id
 
+    def _assert_unique_pair(self, e: Edge) -> None:
+        # Mirrors migration 0004's unique index engram_edges_undirected_pair:
+        # one edge per undirected node pair per learner. Postgres raises
+        # asyncpg.UniqueViolationError; the fake raises ValueError.
+        pair = frozenset((e.source_id, e.target_id))
+        if any(ex.learner_id == e.learner_id
+               and frozenset((ex.source_id, ex.target_id)) == pair
+               for ex in self.edges):
+            raise ValueError(
+                f"duplicate edge pair {e.source_id}~{e.target_id} for {e.learner_id}")
+
     async def insert_edge(self, e: Edge) -> str:
+        self._assert_unique_pair(e)
         e.id = e.id or self._next_id()
         self.edges.append(e)
         return e.id
@@ -223,9 +235,10 @@ class FakeStorage:
             return idmap.get(x, x)
 
         for e in plan.new_edges:
-            e.id = e.id or self._next_id()
             e.source_id = rid(e.source_id)
             e.target_id = rid(e.target_id)
+            self._assert_unique_pair(e)
+            e.id = e.id or self._next_id()
             self.edges.append(e)
         for upd in plan.edge_updates:
             for e in self.edges:

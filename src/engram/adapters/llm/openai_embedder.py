@@ -12,7 +12,8 @@ from typing import Any, Protocol
 
 
 class _AsyncEmbeddingsClient(Protocol):
-    embeddings: Any
+    @property
+    def embeddings(self) -> Any: ...
 
 
 class OpenAIEmbedder:

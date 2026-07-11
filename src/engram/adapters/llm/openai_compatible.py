@@ -15,7 +15,8 @@ from engram.core.models import Completion, Message
 
 
 class _AsyncChatClient(Protocol):
-    chat: Any
+    @property
+    def chat(self) -> Any: ...
 
 
 class OpenAICompatibleLLM:

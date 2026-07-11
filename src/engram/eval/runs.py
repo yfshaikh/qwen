@@ -28,7 +28,7 @@ def read_run(run_dir: Path) -> dict:
 
 
 def list_runs(base_dir: Path = RUNS_DIR) -> list[dict]:
-    out = []
+    out: list[dict] = []
     base = Path(base_dir)
     if not base.exists():
         return out

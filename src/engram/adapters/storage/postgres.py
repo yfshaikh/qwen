@@ -83,6 +83,11 @@ class PostgresStorage:
             self._dsn, min_size=1, max_size=4, init=_init_conn
         )
 
+    @property
+    def _p(self) -> asyncpg.Pool:
+        assert self._pool is not None, "PostgresStorage used before connect()"
+        return self._pool
+
     async def close(self) -> None:
         if self._pool is not None:
             await self._pool.close()
@@ -92,7 +97,7 @@ class PostgresStorage:
         if self._pool is None:
             return False
         try:
-            async with self._pool.acquire() as conn:
+            async with self._p.acquire() as conn:
                 if await conn.fetchval("SELECT 1") != 1:
                     return False
                 return bool(
@@ -106,11 +111,11 @@ class PostgresStorage:
     # --- writes ---------------------------------------------------------
 
     async def insert_event(self, e: LearningEvent) -> str:
-        async with self._pool.acquire() as conn:
+        async with self._p.acquire() as conn:
             return str(await self._insert_event(conn, e))
 
     async def insert_events(self, events: list[LearningEvent]) -> list[str]:
-        async with self._pool.acquire() as conn:
+        async with self._p.acquire() as conn:
             async with conn.transaction():
                 return [str(await self._insert_event(conn, e)) for e in events]
 
@@ -127,7 +132,7 @@ class PostgresStorage:
         )
 
     async def insert_node(self, n: Node) -> str:
-        async with self._pool.acquire() as conn:
+        async with self._p.acquire() as conn:
             nid = await conn.fetchval(
                 """
                 INSERT INTO engram_nodes
@@ -142,7 +147,7 @@ class PostgresStorage:
             return str(nid)
 
     async def insert_edge(self, e: Edge) -> str:
-        async with self._pool.acquire() as conn:
+        async with self._p.acquire() as conn:
             eid = await conn.fetchval(
                 """
                 INSERT INTO engram_edges
@@ -155,7 +160,7 @@ class PostgresStorage:
             return str(eid)
 
     async def insert_evidence(self, ev: Evidence) -> str:
-        async with self._pool.acquire() as conn:
+        async with self._p.acquire() as conn:
             evid = await conn.fetchval(
                 """
                 INSERT INTO engram_evidence
@@ -169,7 +174,7 @@ class PostgresStorage:
             return str(evid)
 
     async def delete_learner(self, learner_id: str) -> None:
-        async with self._pool.acquire() as conn:
+        async with self._p.acquire() as conn:
             async with conn.transaction():
                 # nodes cascade to edges/evidence/mastery_history (FK ON DELETE CASCADE)
                 await conn.execute("DELETE FROM engram_nodes WHERE learner_id = $1", learner_id)
@@ -184,7 +189,7 @@ class PostgresStorage:
     async def vector_search(
         self, learner_id: str, query_vec: list[float], k: int
     ) -> list[Node]:
-        async with self._pool.acquire() as conn:
+        async with self._p.acquire() as conn:
             rows = await conn.fetch(
                 f"""
                 SELECT {_NODE_COLS} FROM engram_nodes
@@ -197,7 +202,7 @@ class PostgresStorage:
             return [_row_to_node(r) for r in rows]
 
     async def get_edges(self, learner_id: str, node_ids: list[str]) -> list[Edge]:
-        async with self._pool.acquire() as conn:
+        async with self._p.acquire() as conn:
             rows = await conn.fetch(
                 """
                 SELECT id, learner_id, source_id, target_id, type, weight, created_at
@@ -221,7 +226,7 @@ class PostgresStorage:
             ]
 
     async def get_nodes(self, learner_id: str, node_ids: list[str]) -> list[Node]:
-        async with self._pool.acquire() as conn:
+        async with self._p.acquire() as conn:
             rows = await conn.fetch(
                 f"""
                 SELECT {_NODE_COLS} FROM engram_nodes
@@ -234,7 +239,7 @@ class PostgresStorage:
     async def top_evidence(
         self, node_ids: list[str], per_node: int
     ) -> dict[str, list[Evidence]]:
-        async with self._pool.acquire() as conn:
+        async with self._p.acquire() as conn:
             rows = await conn.fetch(
                 """
                 SELECT id, node_id, kind, content, source_ref, embedding,
@@ -273,7 +278,7 @@ class PostgresStorage:
     async def get_pending_events(
         self, learner_id: str, *, limit: int | None = None
     ) -> list[LearningEvent]:
-        async with self._pool.acquire() as conn:
+        async with self._p.acquire() as conn:
             if limit is None:
                 rows = await conn.fetch(
                     f"SELECT {_EVENT_COLS} FROM engram_events "
@@ -294,7 +299,7 @@ class PostgresStorage:
     async def get_events(
         self, learner_id: str, limit: int = 200
     ) -> list[LearningEvent]:
-        async with self._pool.acquire() as conn:
+        async with self._p.acquire() as conn:
             rows = await conn.fetch(
                 f"SELECT {_EVENT_COLS} FROM engram_events "
                 "WHERE learner_id = $1 ORDER BY ts DESC LIMIT $2",
@@ -304,7 +309,7 @@ class PostgresStorage:
             return [_row_to_event(r) for r in reversed(rows)]
 
     async def get_live_nodes(self, learner_id: str) -> list[Node]:
-        async with self._pool.acquire() as conn:
+        async with self._p.acquire() as conn:
             rows = await conn.fetch(
                 f"SELECT {_NODE_COLS} FROM engram_nodes "
                 "WHERE learner_id = $1 AND forgotten_at IS NULL",
@@ -313,7 +318,7 @@ class PostgresStorage:
             return [_row_to_node(r) for r in rows]
 
     async def get_all_nodes(self, learner_id: str) -> list[Node]:
-        async with self._pool.acquire() as conn:
+        async with self._p.acquire() as conn:
             rows = await conn.fetch(
                 f"SELECT {_NODE_COLS} FROM engram_nodes WHERE learner_id = $1",
                 learner_id,
@@ -322,7 +327,7 @@ class PostgresStorage:
 
     @asynccontextmanager
     async def consolidation_lock(self, learner_id: str):
-        async with self._pool.acquire() as conn:
+        async with self._p.acquire() as conn:
             got = await conn.fetchval(
                 "SELECT pg_try_advisory_lock(hashtext($1))", learner_id
             )
@@ -335,7 +340,7 @@ class PostgresStorage:
                     )
 
     async def apply_consolidation(self, plan) -> None:
-        async with self._pool.acquire() as conn:
+        async with self._p.acquire() as conn:
             async with conn.transaction():
                 idmap: dict[str, str] = {}
                 for n in plan.new_nodes:
@@ -407,60 +412,60 @@ class PostgresStorage:
     async def merge_nodes(self, learner_id: str, keep_id: str, drop_id: str, *,
                           mastery, confidence, salience, importance,
                           rationale: str) -> None:
-        """Repair-merge drop into keep: union evidence, repoint edges (dropping
-        self-loops and weaker duplicates on keep's incident pairs), update keep's
-        scores, soft-forget drop. One transaction; audited as op=merge.
+        """Repair-merge drop into keep: union evidence, resolve edge collisions,
+        repoint drop's edges, update keep's scores, soft-forget drop. One
+        transaction; audited as op=merge with dropped duplicates itemized.
 
-        Duplicate-edge cleanup is scoped to pairs touching keep_id (not
-        learner-wide). Tie-break matches FakeStorage: higher
-        (edge_rank, weight, id) wins. Rank CASE must stay in sync with
-        engram.core.edges.EDGE_RANK.
+        Collision resolution runs BEFORE the repoint so the undirected-pair
+        unique index (migration 0004) is never transiently violated. Tie-break
+        matches FakeStorage: higher (edge_rank, weight, id) wins. The rank CASE
+        must stay in sync with engram.core.edges.EDGE_RANK.
         """
-        async with self._pool.acquire() as conn:
+        # a = the weaker edge of a keep-X / drop-X collision pair; shared by the
+        # audit SELECT and the DELETE so they can never disagree.
+        collision = """
+            a.learner_id=$1 AND b.learner_id=$1 AND a.id <> b.id
+            AND (a.source_id IN ($2,$3) OR a.target_id IN ($2,$3))
+            AND (b.source_id IN ($2,$3) OR b.target_id IN ($2,$3))
+            AND (CASE WHEN a.source_id IN ($2,$3) THEN a.target_id
+                      ELSE a.source_id END)
+              = (CASE WHEN b.source_id IN ($2,$3) THEN b.target_id
+                      ELSE b.source_id END)
+            AND (CASE a.type WHEN 'prerequisite' THEN 2 WHEN 'part_of' THEN 1 ELSE 0 END,
+                 a.weight, a.id)
+              < (CASE b.type WHEN 'prerequisite' THEN 2 WHEN 'part_of' THEN 1 ELSE 0 END,
+                 b.weight, b.id)
+        """
+        async with self._p.acquire() as conn:
             async with conn.transaction():
                 await conn.execute(
                     "UPDATE engram_evidence SET node_id=$1 WHERE node_id=$2",
                     keep_id, drop_id)
+                # 1. edges directly between keep and drop would become self-loops
+                await conn.execute(
+                    """
+                    DELETE FROM engram_edges
+                    WHERE learner_id=$1
+                      AND ((source_id=$2 AND target_id=$3)
+                        OR (source_id=$3 AND target_id=$2))
+                    """,
+                    learner_id, keep_id, drop_id)
+                # 2. keep-X vs drop-X collisions: capture, then delete the weaker
+                dropped = await conn.fetch(
+                    f"SELECT a.type, a.weight FROM engram_edges a, engram_edges b"
+                    f" WHERE {collision}",
+                    learner_id, keep_id, drop_id)
+                await conn.execute(
+                    f"DELETE FROM engram_edges a USING engram_edges b"
+                    f" WHERE {collision}",
+                    learner_id, keep_id, drop_id)
+                # 3. repoint what remains (collision-free by construction)
                 await conn.execute(
                     "UPDATE engram_edges SET source_id=$1 WHERE source_id=$2",
                     keep_id, drop_id)
                 await conn.execute(
                     "UPDATE engram_edges SET target_id=$1 WHERE target_id=$2",
                     keep_id, drop_id)
-                await conn.execute(
-                    "DELETE FROM engram_edges WHERE learner_id=$1 AND source_id=target_id",
-                    learner_id)
-                # Capture weaker duplicates before delete for the audit trail.
-                dropped = await conn.fetch(
-                    """
-                    SELECT a.id, a.type, a.weight, a.source_id, a.target_id
-                    FROM engram_edges a
-                    JOIN engram_edges b ON a.learner_id=b.learner_id AND a.id <> b.id
-                      AND ((a.source_id=b.source_id AND a.target_id=b.target_id)
-                        OR (a.source_id=b.target_id AND a.target_id=b.source_id))
-                      AND (a.source_id=$2 OR a.target_id=$2)
-                      AND (b.source_id=$2 OR b.target_id=$2)
-                      AND (CASE a.type WHEN 'prerequisite' THEN 2 WHEN 'part_of' THEN 1 ELSE 0 END,
-                           a.weight, a.id)
-                        < (CASE b.type WHEN 'prerequisite' THEN 2 WHEN 'part_of' THEN 1 ELSE 0 END,
-                           b.weight, b.id)
-                    WHERE a.learner_id=$1
-                    """,
-                    learner_id, keep_id)
-                await conn.execute(
-                    """
-                    DELETE FROM engram_edges a USING engram_edges b
-                    WHERE a.learner_id=$1 AND b.learner_id=$1 AND a.id <> b.id
-                      AND (a.source_id=$2 OR a.target_id=$2)
-                      AND (b.source_id=$2 OR b.target_id=$2)
-                      AND ((a.source_id=b.source_id AND a.target_id=b.target_id)
-                        OR (a.source_id=b.target_id AND a.target_id=b.source_id))
-                      AND (CASE a.type WHEN 'prerequisite' THEN 2 WHEN 'part_of' THEN 1 ELSE 0 END,
-                           a.weight, a.id)
-                        < (CASE b.type WHEN 'prerequisite' THEN 2 WHEN 'part_of' THEN 1 ELSE 0 END,
-                           b.weight, b.id)
-                    """,
-                    learner_id, keep_id)
                 await conn.execute(
                     "UPDATE engram_nodes SET mastery=$1, confidence=$2, salience=$3,"
                     " importance=$4 WHERE id=$5",
@@ -478,7 +483,7 @@ class PostgresStorage:
                     learner_id, audit)
 
     async def get_audit(self, learner_id: str, since=None, limit: int = 100) -> list[dict]:
-        async with self._pool.acquire() as conn:
+        async with self._p.acquire() as conn:
             rows = await conn.fetch(
                 "SELECT id, op, rationale, model, tokens, cost, ts FROM engram_audit "
                 "WHERE learner_id = $1 AND ($2::timestamptz IS NULL OR ts > $2) "
@@ -501,7 +506,7 @@ class PostgresStorage:
     # --- voice sessions (host-layer) ------------------------------------
 
     async def create_voice_session(self, learner_id: str) -> str:
-        async with self._pool.acquire() as conn:
+        async with self._p.acquire() as conn:
             sid = await conn.fetchval(
                 "INSERT INTO engram_voice_sessions (learner_id) VALUES ($1) RETURNING id",
                 learner_id,
@@ -509,14 +514,14 @@ class PostgresStorage:
             return str(sid)
 
     async def end_voice_session(self, session_id: str) -> None:
-        async with self._pool.acquire() as conn:
+        async with self._p.acquire() as conn:
             await conn.execute(
                 "UPDATE engram_voice_sessions SET ended_at = now() WHERE id = $1",
                 session_id,
             )
 
     async def append_voice_turn(self, session_id, learner_id, role, text) -> str:
-        async with self._pool.acquire() as conn:
+        async with self._p.acquire() as conn:
             tid = await conn.fetchval(
                 "INSERT INTO engram_voice_turns (session_id, learner_id, role, text)"
                 " VALUES ($1,$2,$3,$4) RETURNING id",
@@ -525,7 +530,7 @@ class PostgresStorage:
             return str(tid)
 
     async def list_voice_sessions(self, learner_id: str, limit: int = 50) -> list[dict]:
-        async with self._pool.acquire() as conn:
+        async with self._p.acquire() as conn:
             rows = await conn.fetch(
                 """
                 SELECT s.id, s.started_at, s.ended_at,
@@ -543,7 +548,7 @@ class PostgresStorage:
                      "ended_at": r["ended_at"], "turns": r["turns"]} for r in rows]
 
     async def list_voice_turns(self, session_id: str) -> list[dict]:
-        async with self._pool.acquire() as conn:
+        async with self._p.acquire() as conn:
             rows = await conn.fetch(
                 "SELECT id, role, text, ts FROM engram_voice_turns"
                 " WHERE session_id = $1 ORDER BY ts",

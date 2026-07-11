@@ -31,7 +31,9 @@ def _rank_of(expected: str, ordered: list[str]) -> int | None:
 
 def score_probe(ordered_labels: list[str], probe: Probe) -> ProbeScore:
     penalty = len(ordered_labels) + 1
-    hit, missing, ranks = [], [], {}
+    hit: list[str] = []
+    missing: list[str] = []
+    ranks: dict[str, int] = {}
     for exp in probe.expect_nodes:
         r = _rank_of(exp, ordered_labels)
         ranks[exp] = r if r is not None else penalty

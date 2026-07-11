@@ -27,6 +27,7 @@ from engram.core.extraction import (
     parse_extraction,
 )
 from engram.core.mastery import decay_salience, ewma, observation_for, update_confidence
+from engram.core.ports import EmbedderPort, LLMPort, StoragePort
 from engram.core.models import Edge, EdgeType, Evidence, EvidenceKind, Message, Node, NodeType
 from engram.core.recall import cosine_similarity
 from engram.core.text import normalize_label, token_jaccard
@@ -55,7 +56,8 @@ class _Work:
 
 
 class Keeper:
-    def __init__(self, storage, llm, embedder, params: KeeperParams, clock=None) -> None:
+    def __init__(self, storage: StoragePort, llm: LLMPort, embedder: EmbedderPort,
+                 params: KeeperParams, clock=None) -> None:
         self.storage = storage
         self.llm = llm
         self.embedder = embedder
