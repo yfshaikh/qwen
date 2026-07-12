@@ -12,6 +12,7 @@ export interface GraphNode {
   mastery: number | null
   confidence: number | null
   salience: number | null
+  importance?: number | null
   evidence: GraphEvidence[]
 }
 

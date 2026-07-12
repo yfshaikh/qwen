@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from engram.core.models import Edge, Evidence, GraphView, Node
+from engram.core.models import Edge, Evidence, GraphEdge, GraphNode, GraphView, Node
 
 
 async def build_graph(
@@ -59,7 +59,7 @@ async def _neighborhood(storage: Any, learner_id: str, focus: str, hops: int) ->
     return list(collected.values())
 
 
-def _node_dict(node: Node, evs: list[Evidence]) -> dict[str, Any]:
+def _node_dict(node: Node, evs: list[Evidence]) -> GraphNode:
     return {
         "id": node.id,
         "label": node.label,
@@ -68,6 +68,7 @@ def _node_dict(node: Node, evs: list[Evidence]) -> dict[str, Any]:
         "mastery": node.mastery,
         "confidence": node.confidence,
         "salience": node.salience,
+        "importance": node.importance,
         "evidence": [
             {"kind": e.kind.value, "content": e.content, "importance": e.importance}
             for e in evs
@@ -75,7 +76,7 @@ def _node_dict(node: Node, evs: list[Evidence]) -> dict[str, Any]:
     }
 
 
-def _edge_dict(e: Edge) -> dict[str, Any]:
+def _edge_dict(e: Edge) -> GraphEdge:
     return {
         "id": e.id,
         "source": e.source_id,

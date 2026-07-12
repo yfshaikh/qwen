@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "engram"
-version = "0.0.1"
+version = "0.1.0"
 description = "App-agnostic memory core for AI tutors."
 readme = "README.md"
 requires-python = ">=3.12"
@@ -46,6 +46,6 @@ target-version = "py312"
 # Guardrail: catch port-contract drift (e.g. a storage method the core calls
 # but that's missing from StoragePort). Deliberately lenient elsewhere — the
 # codebase is duck-typed by design; we type the seams, not everything.
-files = ["src/engram"]
+files = ["src/engram", "tests/typing_probe.py"]
 python_version = "3.12"
 ignore_missing_imports = true

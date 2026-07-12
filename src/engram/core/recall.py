@@ -10,9 +10,15 @@ from __future__ import annotations
 
 import math
 from dataclasses import dataclass
-from typing import Any
 
-from engram.core.models import Edge, Evidence, Node, RecallResult
+from engram.core.models import (
+    Edge,
+    Evidence,
+    Node,
+    RecallResult,
+    ScoredNode,
+    SubgraphEdge,
+)
 from engram.core.ports import EmbedderPort, StoragePort
 from engram.core.tokens import TokenCounter
 
@@ -176,7 +182,7 @@ class Recall:
             self._node_dict(score, node, sub, ev_map.get(node.id or "", []))
             for score, node, sub in sub_source
         ]
-        sub_edges = [
+        sub_edges: list[SubgraphEdge] = [
             {
                 "id": e.id,
                 "source": e.source_id,
@@ -242,7 +248,7 @@ class Recall:
     @staticmethod
     def _node_dict(
         score: float, node: Node, sub: dict[str, float], evs: list[Evidence]
-    ) -> dict[str, Any]:
+    ) -> ScoredNode:
         return {
             "id": node.id,
             "type": node.type.value,
