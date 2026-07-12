@@ -1,10 +1,26 @@
-# Consumer SDK & exported types — enhancement request
+# Consumer SDK & exported types
 
-**Status:** wishlist (2026-06-30). Motivated by the Marfini in-process
-integration, where consuming Engram meant re-declaring its data shapes twice
-(Pydantic on the backend, TypeScript on the frontend).
+**Status:** superseded / implemented (qwen side, 2026-07-11).
 
-## The problem
+This 2026-06-30 wishlist is **implemented** (qwen / Engram side). Local agent
+plan/spec notes (not in git): `docs/superpowers/specs/memory-v2/2026-07-11-consumer-sdk-design.md`,
+`docs/superpowers/plans/2026-07-11-consumer-sdk.md`.
+
+**Shipped on the qwen / Engram side:** typed top-level exports + `py.typed`,
+typed facade returns, `EngramHost` runtime, mountable FastAPI `memory_router`,
+and generated TS types. **Marfini consumption** (install from `engram-poc`,
+swap glue for `EngramHost` + router) is still pending.
+
+For the embed snippet, see the README **"Embedding Engram"** section.
+
+---
+
+## Historical wishlist (2026-06-30)
+
+The sections below are the original enhancement request, kept for context.
+Do not treat them as the live contract — the shipped surface above is authoritative.
+
+### The problem
 Engram is consumed as an embedded pip dependency — the host calls the `Engram`
 facade in-process. Today the public surface is effectively just that facade; the
 data **types are private**, so a consumer that wants typed access, or wants to
@@ -14,7 +30,7 @@ Pydantic models in `api/routes/memory_routes.py`, again as TS interfaces in
 `frontend/src/modules/memory/types.ts` — both hand-copied from Engram internals.
 Every schema change now has to be mirrored in three places.
 
-## Concrete friction (current state)
+### Concrete friction (current state)
 - **Top-level package exports only `Engram`.** `engram/__init__.py` has
   `__all__ = ["Engram"]`; data classes live in `engram.core.models` and the
   HTTP request/response models in `engram.app.schemas`. There's no blessed
@@ -38,7 +54,7 @@ Every schema change now has to be mirrored in three places.
   same shapes, but there's nothing a JS/TS consumer can install or codegen from,
   so the interfaces get hand-copied a third time.
 
-## Desired direction
+### Desired direction
 A stable, typed, low-friction consumer SDK:
 
 1. **Export public types from the top level + add `py.typed`.** Re-export the
@@ -63,7 +79,7 @@ A stable, typed, low-friction consumer SDK:
    as a small `@engram/types` package or a committed generated file. Kills the
    hand-copied `types.ts`.
 
-## Priority / sizing
+### Priority / sizing
 - **Cheap, high value:** (1) top-level exports + `py.typed`. Immediately removes
   "import from internals" and gives Python consumers types for free.
 - **Medium:** (2) typed facade returns + collapsing the core/app model
@@ -72,7 +88,7 @@ A stable, typed, low-friction consumer SDK:
 - **Larger:** (3) a mountable, auth-injectable router — best DX, but a bigger
   API-design commitment; do after (1)/(2).
 
-## Motivating example (Marfini)
+### Motivating example (Marfini)
 `api/routes/memory_routes.py` re-declares `GraphResponse` / `GraphNode` /
 `GraphEdge` / `GraphEvidence` / `AuditRow` as Pydantic;
 `frontend/src/modules/memory/types.ts` re-declares them as TS. With (1)+(2) the
