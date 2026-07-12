@@ -2,6 +2,8 @@
 
 Usage: ``python -m engram.export_types [out.ts]``
 
+Default output: ``packages/engram-types/index.d.ts`` (the ``@engram/types`` npm package).
+
 Stdlib only. Supported JSON Schema subset: string/number/integer/boolean/null,
 arrays, ``$ref``/``$defs``, unions via ``anyOf``. Anything else → ``unknown``.
 """
@@ -103,9 +105,13 @@ def emit_ts(models: list[type[BaseModel]] | None = None) -> str:
     return header + "\n\n".join(seen[n] for n in order) + "\n"
 
 
+# Canonical npm package path (repo-root relative). Override with CLI arg.
+_DEFAULT_OUT = Path("packages/engram-types/index.d.ts")
+
+
 def main(argv: list[str] | None = None) -> None:
     argv = argv if argv is not None else sys.argv[1:]
-    out = Path(argv[0]) if argv else Path("web/src/generated/engram-types.ts")
+    out = Path(argv[0]) if argv else _DEFAULT_OUT
     out.parent.mkdir(parents=True, exist_ok=True)
     out.write_text(emit_ts(), encoding="utf-8")
     print(f"wrote {out}", file=sys.stderr)

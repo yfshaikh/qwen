@@ -15,6 +15,7 @@ from typing import Any, Callable
 from fastapi import APIRouter, Depends
 from pydantic import BaseModel, Field
 
+from engram.app.schemas import GraphEdge, GraphNode
 from engram.host import EngramHost
 
 logger = logging.getLogger("engram.integrations.fastapi")
@@ -22,8 +23,8 @@ logger = logging.getLogger("engram.integrations.fastapi")
 
 class MemGraphResponse(BaseModel):
     enabled: bool = True
-    nodes: list[dict] = Field(default_factory=list)
-    edges: list[dict] = Field(default_factory=list)
+    nodes: list[GraphNode] = Field(default_factory=list)
+    edges: list[GraphEdge] = Field(default_factory=list)
 
 
 class MemAuditRow(BaseModel):
@@ -56,11 +57,15 @@ class RecallProbeRequest(BaseModel):
     budget: int | None = None
 
 
+class RecallSubgraph(BaseModel):
+    nodes: list[dict[str, Any]] = Field(default_factory=list)
+    edges: list[dict[str, Any]] = Field(default_factory=list)
+
+
 class RecallProbeResponse(BaseModel):
     enabled: bool = True
     text_block: str = ""
-    subgraph: dict[str, Any] = Field(default_factory=lambda: {"nodes": [], "edges": []})
-
+    subgraph: RecallSubgraph = Field(default_factory=RecallSubgraph)
 
 def memory_router(
     get_host: Callable[[], EngramHost],
