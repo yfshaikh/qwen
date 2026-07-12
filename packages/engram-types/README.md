@@ -1,27 +1,34 @@
 # `@engram/types`
 
-Generated TypeScript interfaces for Engram's mountable `memory_router` HTTP
-surface (plus shared graph/audit schemas). **Do not edit `index.d.ts` by hand.**
+Generated TypeScript interfaces for Engram memory HTTP shapes (from Pydantic
+via `python -m engram.export_types`). **Do not edit `index.d.ts` by hand.**
 
-## Regenerate
-
-From the qwen repo root:
+## Regenerate (in the qwen repo)
 
 ```bash
 python -m engram.export_types
-# or: npm run generate --prefix packages/engram-types
+# writes packages/engram-types/index.d.ts
 ```
 
-## Install (git path)
+## Consuming from Marfini (and other apps)
 
-```json
-"@engram/types": "github:yfshaikh/qwen#consumer-sdk&path:packages/engram-types"
+npm **cannot** reliably install a subdirectory of a GitHub monorepo at a
+specific branch (`#branch&path:…` is ignored; `#branch::path:…` often still
+fails in the fetcher). Until this package is published to the npm registry,
+consumers should **vendor** the generated file:
+
+```bash
+# from Marfini/frontend
+npm run sync:engram-types
+# or:
+curl -fsSL \
+  "https://raw.githubusercontent.com/yfshaikh/qwen/consumer-sdk/packages/engram-types/index.d.ts" \
+  -o src/modules/memory/generated/engram-types.ts
 ```
 
-After this lands on `engram-poc`, point the ref at that branch instead.
+Local sibling checkout (dev only):
 
-Local sibling checkout:
-
-```json
-"@engram/types": "file:../../qwen/packages/engram-types"
+```bash
+cp ../../qwen/packages/engram-types/index.d.ts \
+  src/modules/memory/generated/engram-types.ts
 ```
