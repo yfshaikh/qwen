@@ -25,6 +25,11 @@ class DisabledEngram:
     """Null-object Engram: every verb returns its typed empty result."""
 
     enabled = False
+    # Present so attribute access on a disabled host degrades to None rather than
+    # AttributeError (the real Engram exposes these). Callers should still gate on
+    # host.enabled; these keep `getattr(host.memory, "storage", None)` honest.
+    storage = None
+    settings = None
 
     async def ingest(self, events: list[LearningEvent]) -> None:
         return None
@@ -112,6 +117,14 @@ class EngramHost:
             return True
         except Exception as exc:  # noqa: BLE001 — degradation is the contract
             logger.error("Engram start failed (memory disabled): %s", exc)
+            # A factory-built instance may have opened a partial asyncpg pool
+            # before connect() raised — close it (best-effort) so connections
+            # don't leak. An injected instance is the caller's to manage.
+            if self._engram is not None and self._engram is not self._injected:
+                try:
+                    await self._engram.aclose()
+                except Exception:  # noqa: BLE001 — best-effort cleanup
+                    pass
             self._engram = self._injected  # never discard an injected instance
             self._failed = True
             self._started = False
@@ -159,7 +172,7 @@ class EngramHost:
         self._consolidating[learner_id] = {"rerun": False}
         task = asyncio.create_task(self._consolidate_loop(learner_id))
         self._tasks.add(task)
-        task.add_done_callback(self._tasks.discard)
+        task.add_done_callback(self._reap)
 
     async def _consolidate_loop(self, learner_id: str) -> None:
         try:
@@ -213,21 +226,33 @@ class EngramHost:
         return await self._safe_ingest([LearningEvent(
             learner_id=learner_id, type="note", text=text, refs=dict(refs or {}))])
 
+    def _reap(self, task: asyncio.Task) -> None:
+        """Done-callback for owned background tasks: unregister AND retrieve the
+        exception so a write that outlives a cancelled caller can never surface
+        as an unretrieved-task warning with its failure silently lost."""
+        self._tasks.discard(task)
+        if task.cancelled():
+            return
+        exc = task.exception()
+        if exc is not None:
+            logger.warning("background ingest failed: %s", exc)
+
     async def _safe_ingest(self, events: list[LearningEvent]) -> bool:
         """Shielded, never-raise write. Events were built eagerly by the caller,
-        so a cancellation of the surrounding turn cannot drop a half-built batch."""
+        so a cancellation of the surrounding turn cannot drop a half-built batch.
+        Exceptions are logged by _reap (the single observer) whether the caller
+        awaited to completion or was cancelled mid-write."""
         if not events or not self.enabled:
             return False
+        # Own the shielded write: registered in _tasks so aclose() drains it and
+        # _reap observes its exception even when the caller is cancelled.
+        task = asyncio.ensure_future(self.memory.ingest(events))
+        self._tasks.add(task)
+        task.add_done_callback(self._reap)
         try:
-            # Own the shielded write: register it in _tasks so aclose() drains it
-            # and its exception is never unobserved if the caller is cancelled.
-            task = asyncio.ensure_future(self.memory.ingest(events))
-            self._tasks.add(task)
-            task.add_done_callback(self._tasks.discard)
             await asyncio.shield(task)
             return True
         except asyncio.CancelledError:
             raise  # cooperative: shield kept the write alive; propagate the cancel
-        except Exception as exc:  # noqa: BLE001
-            logger.warning("ingest failed (%d events dropped): %s", len(events), exc)
+        except Exception:  # noqa: BLE001 — logged by _reap; caller just gets False
             return False

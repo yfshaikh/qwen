@@ -14,7 +14,7 @@ export interface GraphEvidence {
 }
 
 export interface GraphNode {
-  id: string;
+  id: string | null;
   label: string;
   type: string;
   summary: string | null;
@@ -73,5 +73,5 @@ export interface AuditRow {
   model: string | null;
   tokens: number | null;
   cost: number | null;
-  ts: string;
+  ts: string | null;
 }

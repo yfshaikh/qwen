@@ -199,3 +199,73 @@ async def test_log_disabled_and_failure_return_false(caplog):
     host._engram_factory = lambda **kw: (_ for _ in ()).throw(RuntimeError("no"))
     await host.start()
     assert await host.log_turn("L", user_text="hi") is False  # disabled: no raise
+
+
+# --- review regression fixes (2026-07-12) ------------------------------------
+
+def test_disabled_engram_storage_settings_are_none():
+    # attribute access on a disabled host degrades to None, not AttributeError
+    d = DisabledEngram()
+    assert d.storage is None
+    assert d.settings is None
+
+
+async def test_start_failure_closes_partial_factory_pool():
+    # A factory host whose connect() raises AFTER building must close the
+    # partially-opened instance so its pool doesn't leak (review finding #3).
+    closed = {"n": 0}
+
+    class _PartialEngram:
+        enabled = True
+
+        async def connect(self):
+            raise RuntimeError("pool half-open then boom")
+
+        async def aclose(self):
+            closed["n"] += 1
+
+    host = EngramHost.from_env(database_url="x")
+    host._engram_factory = lambda **kw: _PartialEngram()
+    assert await host.start() is False
+    assert closed["n"] == 1          # the built instance was closed
+    assert isinstance(host.memory, DisabledEngram)
+
+
+async def test_injected_engram_survives_start_failure_no_close():
+    # An INJECTED instance is the caller's to manage — start() failure must not
+    # close it (only factory-built instances are owned by the host).
+    closed = {"n": 0}
+    eng = _eng()
+
+    async def bad_connect():
+        raise RuntimeError("nope")
+
+    async def track_close():
+        closed["n"] += 1
+
+    eng.connect = bad_connect       # type: ignore[method-assign]
+    eng.aclose = track_close        # type: ignore[method-assign]
+    host = EngramHost(eng)
+    assert await host.start() is False
+    assert closed["n"] == 0          # injected instance NOT closed by the host
+
+
+async def test_failed_background_ingest_is_observed_not_lost(caplog):
+    # A background ingest that fails must be logged via _reap (single observer),
+    # never surface as an unretrieved-task warning (review finding #2).
+    import asyncio
+    import logging
+
+    class _BoomIngest(Engram):
+        async def ingest(self, events):
+            raise RuntimeError("write blew up")
+
+    host = EngramHost(_BoomIngest(storage=FakeStorage(), llm=FakeLLM(),
+                                  embedder=FakeEmbedder(dim=8)))
+    await host.start()
+    with caplog.at_level(logging.WARNING, logger="engram.host"):
+        assert await host.log_note("L", "hi") is False
+        for _ in range(5):
+            await asyncio.sleep(0)
+    assert any("ingest failed" in r.message for r in caplog.records)
+    await host.aclose()

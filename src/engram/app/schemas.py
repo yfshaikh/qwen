@@ -58,7 +58,8 @@ class AuditRow(BaseModel):
     model: str | None = None
     tokens: int | None = None
     cost: float | None = None
-    ts: datetime
+    ts: datetime | None = None  # facade passes storage's ts through untyped; a
+    # non-datetime must not 500 /audit past the handler (matches GraphNode.id)
 
 
 class AuditResponse(BaseModel):
@@ -89,8 +90,8 @@ class GraphEvidence(BaseModel):
 
 
 class GraphNode(BaseModel):
-    id: str
-    label: str
+    id: str | None = None  # source (core.models.GraphNode / node.id) permits None;
+    label: str             # required here would 500 /graph past the router's try/except
     type: str
     summary: str | None = None
     mastery: float | None = None
