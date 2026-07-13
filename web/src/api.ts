@@ -1,11 +1,17 @@
 import type {
+  ActivityDay,
   AuditRow,
+  Blocker,
   ChatMessage,
   ConsolidateReport,
   EvalRun,
   EvalScenario,
   EvalSnapshot,
   GraphResponse,
+  Hotspot,
+  InsightsSummary,
+  MasteryPoint,
+  ReviewItem,
   VoiceSession,
   VoiceTurn,
 } from './types'
@@ -101,4 +107,40 @@ export async function getEvalSnapshot(dir: string, n: number): Promise<EvalSnaps
   const r = await fetch(`/eval/runs/${encodeURIComponent(dir)}/snapshots/${n}`)
   if (!r.ok) throw new Error(`eval snapshot ${r.status}`)
   return r.json()
+}
+
+export async function getInsightsSummary(learnerId: string): Promise<InsightsSummary> {
+  const r = await fetch(`/insights/summary?learner_id=${encodeURIComponent(learnerId)}`)
+  if (!r.ok) throw new Error(`/insights/summary ${r.status}`)
+  return r.json()
+}
+
+export async function getMasteryTimeline(learnerId: string): Promise<Record<string, MasteryPoint[]>> {
+  const r = await fetch(`/insights/mastery-timeline?learner_id=${encodeURIComponent(learnerId)}`)
+  if (!r.ok) throw new Error(`/insights/mastery-timeline ${r.status}`)
+  return (await r.json()).series
+}
+
+export async function getHotspots(learnerId: string): Promise<Hotspot[]> {
+  const r = await fetch(`/insights/hotspots?learner_id=${encodeURIComponent(learnerId)}`)
+  if (!r.ok) throw new Error(`/insights/hotspots ${r.status}`)
+  return (await r.json()).hotspots
+}
+
+export async function getActivity(learnerId: string): Promise<ActivityDay[]> {
+  const r = await fetch(`/insights/activity?learner_id=${encodeURIComponent(learnerId)}`)
+  if (!r.ok) throw new Error(`/insights/activity ${r.status}`)
+  return (await r.json()).days
+}
+
+export async function getReviewQueue(learnerId: string): Promise<ReviewItem[]> {
+  const r = await fetch(`/insights/review-queue?learner_id=${encodeURIComponent(learnerId)}`)
+  if (!r.ok) throw new Error(`/insights/review-queue ${r.status}`)
+  return (await r.json()).items
+}
+
+export async function getBlockers(learnerId: string): Promise<Blocker[]> {
+  const r = await fetch(`/insights/blockers?learner_id=${encodeURIComponent(learnerId)}`)
+  if (!r.ok) throw new Error(`/insights/blockers ${r.status}`)
+  return (await r.json()).blockers
 }

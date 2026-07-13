@@ -7,6 +7,7 @@ import { SessionSidebar } from './components/SessionSidebar'
 import { VoiceMicPill } from './components/VoiceMicPill'
 import { VoiceTranscriptPanel } from './components/VoiceTranscriptPanel'
 import { EvalsPage } from './components/evals/EvalsPage'
+import { DashboardPage } from './components/dashboard/DashboardPage'
 import { useVoiceTutor } from './voice/useVoiceTutor'
 import * as api from './api'
 import type { AuditRow, ConsolidateReport, EvalScenario, GraphNode, GraphResponse } from './types'
@@ -17,7 +18,7 @@ function newLearner(): string {
 }
 
 export default function App() {
-  const [view, setView] = useState<'explainer' | 'console' | 'evals'>('explainer')
+  const [view, setView] = useState<'explainer' | 'console' | 'evals' | 'dashboard'>('explainer')
   const [evalScenarios, setEvalScenarios] = useState<EvalScenario[] | null>(null)
   const [learner, setLearner] = useState(() => localStorage.getItem('engram.learner') || newLearner())
   const [graph, setGraph] = useState<GraphResponse>({ nodes: [], edges: [] })
@@ -188,6 +189,16 @@ export default function App() {
           </button>
         )}
         <button
+          onClick={() => setView(view === 'dashboard' ? 'console' : 'dashboard')}
+          className={`rounded-lg border px-2.5 py-1 text-xs font-medium transition ${
+            view === 'dashboard'
+              ? 'border-indigo-200 bg-indigo-50 text-indigo-700'
+              : 'border-zinc-200 text-zinc-600 hover:bg-zinc-50'
+          }`}
+        >
+          Dashboard
+        </button>
+        <button
           onClick={() => setView('explainer')}
           className="rounded-lg border border-zinc-200 px-2.5 py-1 text-xs font-medium text-zinc-600 transition hover:bg-zinc-50"
         >
@@ -203,6 +214,8 @@ export default function App() {
 
       {view === 'evals' ? (
         <EvalsPage scenarios={evalScenarios ?? []} />
+      ) : view === 'dashboard' ? (
+        <DashboardPage learnerId={learner} graph={graph} />
       ) : (
         <>
       <div className="flex min-h-0 flex-1">

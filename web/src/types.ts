@@ -117,3 +117,49 @@ export interface EvalSnapshot {
   graph: GraphResponse & { evidence?: Record<string, unknown[]> }
   report: Record<string, number>
 }
+
+export interface InsightsSummary {
+  concepts: number
+  edges: number
+  evidence: number
+  avg_mastery: number | null
+  avg_confidence: number | null
+  forgotten: number
+  fading: number
+  open_misconceptions: number
+  sessions: number
+  last_active: string | null
+}
+
+export interface MasteryPoint {
+  ts: string | null
+  mastery: number | null
+  confidence: number | null
+}
+
+export interface Hotspot {
+  node_id: string
+  label: string
+  struggle: number
+  mastery: number | null
+  trend: string
+}
+
+export interface ActivityDay {
+  day: string
+  count: number
+}
+
+export interface ReviewItem {
+  node_id: string
+  label: string
+  score: number
+  reason: string
+}
+
+export interface Blocker {
+  node_id: string
+  label: string
+  mastery: number
+  path: string[]
+}

@@ -33,6 +33,15 @@ body {
   }
 }
 
+/* Blocked-path highlight (dashboard) */
+.engram-node-highlight {
+  box-shadow: 0 0 0 3px rgb(251 191 36 / 0.9);
+  border-radius: 0.75rem;
+}
+.engram-node-dim {
+  opacity: 0.35;
+}
+
 /* Thin scrollbars */
 .scroll-thin::-webkit-scrollbar {
   width: 8px;

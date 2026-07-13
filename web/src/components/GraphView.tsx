@@ -25,10 +25,12 @@ export function GraphView({
   graph,
   flashIds,
   onSelect,
+  highlightIds,
 }: {
   graph: GraphResponse
   flashIds: Set<string>
   onSelect: (n: GraphNode) => void
+  highlightIds?: Set<string>
 }) {
   const { nodes, edges } = useMemo(() => graphToFlow(graph), [graph])
 
@@ -47,7 +49,13 @@ export function GraphView({
     )
   }
 
-  const styled = nodes.map((n) => (flashIds.has(n.id) ? { ...n, className: 'engram-node-flash' } : n))
+  const hl = highlightIds && highlightIds.size > 0 ? highlightIds : null
+  const styled = nodes.map((n) => {
+    const classes = []
+    if (flashIds.has(n.id)) classes.push('engram-node-flash')
+    if (hl) classes.push(hl.has(n.id) ? 'engram-node-highlight' : 'engram-node-dim')
+    return classes.length ? { ...n, className: classes.join(' ') } : n
+  })
   return (
     <ReactFlow
       nodes={styled}
