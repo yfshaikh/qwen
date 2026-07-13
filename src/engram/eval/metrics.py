@@ -64,12 +64,47 @@ async def judge_turn(
         ),
     ]
     out = await llm.complete("judge", msgs, schema=JUDGE_SCHEMA)
-    data = out.json if out.json is not None else json.loads(out.text or "{}")
+    try:
+        data = out.json if out.json is not None else json.loads(out.text or "{}")
+    except (ValueError, TypeError):
+        data = {}
+    if not isinstance(data, dict):
+        data = {}
+    # The judge is a real LLM and does not always honor JUDGE_SCHEMA — it may
+    # return a bool as a string, or adapt_score as a nested object. Coerce
+    # tolerantly so a malformed judgement degrades to neutral rather than
+    # crashing this (informational) check and failing the whole run.
     return {
-        "re_explained": bool(data["re_explained"]),
-        "preference_honored": bool(data["preference_honored"]),
-        "adapt_score": int(data["adapt_score"]),
+        "re_explained": _as_bool(data.get("re_explained")),
+        "preference_honored": _as_bool(data.get("preference_honored")),
+        "adapt_score": _as_score(data.get("adapt_score")),
     }
+
+
+def _as_bool(v: Any) -> bool:
+    if isinstance(v, bool):
+        return v
+    if isinstance(v, (int, float)):
+        return v >= 0.5
+    if isinstance(v, str):
+        return v.strip().lower() in {"true", "yes", "1"}
+    return False  # dict / None / anything unexpected -> not observed
+
+
+def _as_score(v: Any, *, default: int = 3) -> int:
+    """adapt_score clamped to 1..5; unparseable (dict/None/text) -> neutral 3."""
+    if isinstance(v, bool):
+        return default
+    if isinstance(v, (int, float)):
+        n = int(round(v))
+    elif isinstance(v, str):
+        try:
+            n = int(round(float(v.strip())))
+        except ValueError:
+            return default
+    else:
+        return default
+    return max(1, min(5, n))
 
 
 def aggregate_behavior(judgements: list[dict]) -> dict[str, float]:

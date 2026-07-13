@@ -30,3 +30,24 @@ async def test_judge_turn_parses_text_json():
     llm = FakeLLM(canned_text='{"re_explained": false, "preference_honored": true, "adapt_score": 5}')
     out = await judge_turn(llm, TurnRecord("q", "reply", "ctx"), {"mastered": ["Limit"]})
     assert out == {"re_explained": False, "preference_honored": True, "adapt_score": 5}
+
+
+async def test_judge_turn_tolerates_malformed_llm_output():
+    # Real judges (e.g. Qwen) don't always honor JUDGE_SCHEMA: adapt_score can
+    # arrive as a nested object, bools as strings. This must degrade to a
+    # neutral judgement, never raise (which would fail the whole eval run).
+    llm = FakeLLM(canned_text=(
+        '{"re_explained": "yes", "preference_honored": "no",'
+        ' "adapt_score": {"value": 4}}'))
+    out = await judge_turn(llm, TurnRecord("q", "reply", "ctx"), {})
+    assert out == {"re_explained": True, "preference_honored": False, "adapt_score": 3}
+
+
+async def test_judge_turn_clamps_and_defaults():
+    llm = FakeLLM(canned_text='{"adapt_score": 9}')          # out of 1..5
+    out = await judge_turn(llm, TurnRecord("q", "r", "c"), {})
+    assert out["adapt_score"] == 5
+    assert out["re_explained"] is False                       # missing -> False
+    llm2 = FakeLLM(canned_text="not json at all")
+    out2 = await judge_turn(llm2, TurnRecord("q", "r", "c"), {})
+    assert out2 == {"re_explained": False, "preference_honored": False, "adapt_score": 3}
