@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import json
 from contextlib import asynccontextmanager
+from typing import Any
 
 import asyncpg
 from pgvector.asyncpg import register_vector
@@ -51,6 +52,17 @@ def _row_to_event(row: asyncpg.Record) -> LearningEvent:
     )
 
 
+def _vec_to_list(emb: Any) -> list[float] | None:
+    """pgvector <0.5 decodes to an iterable (list/ndarray of float32); >=0.5
+    returns a Vector object. Coerce both to plain list[float] so the domain
+    (and JSON serialization on the /recall path) sees list[float]."""
+    if emb is None:
+        return None
+    if hasattr(emb, "to_list"):
+        return [float(x) for x in emb.to_list()]
+    return [float(x) for x in emb]
+
+
 def _row_to_node(row: asyncpg.Record) -> Node:
     emb = row["embedding"]
     return Node(
@@ -63,9 +75,7 @@ def _row_to_node(row: asyncpg.Record) -> Node:
         confidence=row["confidence"],
         salience=row["salience"],
         importance=row["importance"],
-        # pgvector yields numpy.float32 elements; coerce to plain float so the
-        # domain (and JSON serialization on the /recall path) sees list[float].
-        embedding=[float(x) for x in emb] if emb is not None else None,
+        embedding=_vec_to_list(emb),
         source_refs=row["source_refs"] if row["source_refs"] is not None else [],
         forgotten_at=row["forgotten_at"],
         created_at=row["created_at"],
@@ -266,7 +276,7 @@ class PostgresStorage:
                     kind=EvidenceKind(r["kind"]),
                     content=r["content"],
                     source_ref=r["source_ref"],
-                    embedding=list(emb) if emb is not None else None,
+                    embedding=_vec_to_list(emb),
                     importance=r["importance"],
                     created_at=r["created_at"],
                 )
