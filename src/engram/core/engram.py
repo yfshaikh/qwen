@@ -162,6 +162,12 @@ class Engram:
 
         return await build_graph(self.storage, learner_id, focus)
 
+    @property
+    def insights(self):
+        """Read-only analytics over this learner's graph (lazy; storage-only)."""
+        from engram.insights import Insights
+        return Insights(self.storage)
+
     # --- voice sessions (host-layer passthroughs) -----------------------
 
     async def create_voice_session(self, learner_id: str) -> str:

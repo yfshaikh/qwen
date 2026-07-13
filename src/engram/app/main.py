@@ -16,10 +16,12 @@ from fastapi.responses import StreamingResponse
 from engram.app import deps
 from engram.app.deps import get_engram
 from engram.app.schemas import (
+    ActivityResponse,
     AddRequest,
     AddResponse,
     AuditResponse,
     AuditRow,
+    BlockersResponse,
     ChatMessage,
     ChatRequest,
     ConsolidateRequest,
@@ -28,10 +30,14 @@ from engram.app.schemas import (
     GraphResponse,
     HealthResponse,
     HistoryResponse,
+    HotspotsResponse,
+    InsightsSummary,
+    MasteryTimelineResponse,
     MemoryStatusResponse,
     RecallRequest,
     RecallResponse,
     ReportOut,
+    ReviewQueueResponse,
     SessionsResponse,
     TurnsResponse,
     VoiceSessionOut,
@@ -163,6 +169,43 @@ async def graph(learner_id: str, focus: str | None = None, eng=Depends(get_engra
         nodes=[GraphNode(**n) for n in gv.nodes],
         edges=[GraphEdge(**e) for e in gv.edges],
     )
+
+
+# --- insights (read-only analytics) ---------------------------------------
+# NB: auth-less like every route here (accepted demo posture).
+@app.get("/insights/summary", response_model=InsightsSummary)
+async def insights_summary(learner_id: str, eng=Depends(get_engram)):
+    return InsightsSummary(**await eng.insights.summary(learner_id))
+
+
+@app.get("/insights/mastery-timeline", response_model=MasteryTimelineResponse)
+async def insights_timeline(learner_id: str, node_ids: str | None = None,
+                            eng=Depends(get_engram)):
+    # drop blanks so "a,,b" or a trailing comma can't reach ANY($::uuid[]) as an
+    # empty string (asyncpg would reject it -> 500); [] means "no ids" == None.
+    ids = [s for s in node_ids.split(",") if s.strip()] if node_ids else None
+    series = await eng.insights.mastery_timeline(learner_id, ids or None)
+    return MasteryTimelineResponse(series=series)
+
+
+@app.get("/insights/hotspots", response_model=HotspotsResponse)
+async def insights_hotspots(learner_id: str, k: int = 5, eng=Depends(get_engram)):
+    return HotspotsResponse(hotspots=await eng.insights.hotspots(learner_id, k))
+
+
+@app.get("/insights/activity", response_model=ActivityResponse)
+async def insights_activity(learner_id: str, days: int = 30, eng=Depends(get_engram)):
+    return ActivityResponse(days=await eng.insights.activity(learner_id, days))
+
+
+@app.get("/insights/review-queue", response_model=ReviewQueueResponse)
+async def insights_review_queue(learner_id: str, k: int = 5, eng=Depends(get_engram)):
+    return ReviewQueueResponse(items=await eng.insights.review_queue(learner_id, k))
+
+
+@app.get("/insights/blockers", response_model=BlockersResponse)
+async def insights_blockers(learner_id: str, eng=Depends(get_engram)):
+    return BlockersResponse(blockers=await eng.insights.blockers(learner_id))
 
 
 # utterance/tutor_explanation are the tutor's event types; map them back to chat

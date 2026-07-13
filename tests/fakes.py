@@ -76,7 +76,7 @@ class FakeStorage:
         self.nodes: dict[str, Node] = {}
         self.edges: list[Edge] = []
         self.evidence: list[Evidence] = []
-        self.mastery_history: list = []
+        self._mastery: list[dict] = []
         self.audit: list = []
         self._audit_rows: list[dict] = []
         self._audit_seq = 0
@@ -133,7 +133,7 @@ class FakeStorage:
         self.edges = [e for e in self.edges if e.learner_id != learner_id]
         self.evidence = [ev for ev in self.evidence if ev.node_id not in dead]
         self.events = [e for e in self.events if e.learner_id != learner_id]
-        self.mastery_history = [m for m in self.mastery_history if m[0] not in dead]
+        self._mastery = [m for m in self._mastery if m["node_id"] not in dead]
         self._audit_rows = [r for r in self._audit_rows if r["learner_id"] != learner_id]
         dead_sessions = {sid for sid, s in self.voice_sessions.items()
                          if s["learner_id"] == learner_id}
@@ -260,7 +260,9 @@ class FakeStorage:
                 existing.last_seen_at = upd.last_seen_at
                 existing.forgotten_at = upd.forgotten_at
         for mp in plan.mastery_history:
-            self.mastery_history.append((rid(mp.node_id), mp.mastery, mp.confidence))
+            self._mastery.append({"node_id": rid(mp.node_id), "mastery": mp.mastery,
+                                  "confidence": mp.confidence,
+                                  "ts": datetime.now(timezone.utc)})  # ponytail: wall-clock ts; tests that assert ordering seed _mastery directly
         self.audit.extend(plan.audit)
         for a in plan.audit:
             self._audit_seq += 1
@@ -381,3 +383,30 @@ class FakeStorage:
         rows.sort(key=lambda t: t["ts"])
         return [{"id": t["id"], "role": t["role"], "text": t["text"], "ts": t["ts"]}
                 for t in rows]
+
+    # --- insights read methods ---------------------------------------------
+
+    async def mastery_history(self, learner_id, node_ids=None, since=None) -> list[dict]:
+        mine = {nid for nid, n in self.nodes.items() if n.learner_id == learner_id}
+        rows = [m for m in self._mastery if m["node_id"] in mine
+                and (node_ids is None or m["node_id"] in node_ids)
+                and (since is None or m["ts"] >= since)]
+        return sorted(rows, key=lambda m: m["ts"])
+
+    async def evidence_counts_by_kind(self, learner_id) -> list[dict]:
+        node_learner = {nid: n.learner_id for nid, n in self.nodes.items()}
+        counts: dict[tuple[str, str], int] = {}
+        for ev in self.evidence:
+            if node_learner.get(ev.node_id) != learner_id:
+                continue
+            counts[(ev.node_id, ev.kind.value)] = counts.get((ev.node_id, ev.kind.value), 0) + 1
+        return [{"node_id": nid, "kind": k, "count": c} for (nid, k), c in counts.items()]
+
+    async def event_counts_by_day(self, learner_id, days: int = 30) -> list[dict]:
+        cutoff = datetime.now(timezone.utc) - timedelta(days=days)
+        buckets: dict = {}
+        for e in self.events:
+            if e.learner_id != learner_id or e.ts < cutoff:
+                continue
+            buckets[e.ts.date()] = buckets.get(e.ts.date(), 0) + 1
+        return [{"day": d, "count": c} for d, c in sorted(buckets.items())]
