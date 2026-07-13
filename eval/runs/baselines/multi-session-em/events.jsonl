@@ -1,0 +1,63 @@
+{"type": "status", "status": "running"}
+{"type": "error", "message": "budget cap set but ENGRAM_EVAL_PRICE_* unconfigured; cap cannot trip"}
+{"type": "session", "n": 0, "gap_days": 0.0}
+{"type": "turn", "role": "user", "session": 0}
+{"type": "turn", "role": "assistant", "session": 0}
+{"type": "turn", "role": "user", "session": 0}
+{"type": "turn", "role": "assistant", "session": 0}
+{"type": "turn", "role": "user", "session": 0}
+{"type": "turn", "role": "assistant", "session": 0}
+{"type": "turn", "role": "user", "session": 0}
+{"type": "turn", "role": "assistant", "session": 0}
+{"type": "turn", "role": "user", "session": 0}
+{"type": "turn", "role": "assistant", "session": 0}
+{"type": "turn", "role": "user", "session": 0}
+{"type": "turn", "role": "assistant", "session": 0}
+{"type": "turn", "role": "user", "session": 0}
+{"type": "turn", "role": "assistant", "session": 0}
+{"type": "turn", "role": "user", "session": 0}
+{"type": "turn", "role": "assistant", "session": 0}
+{"type": "consolidated", "session": 0, "report": {"processed_events": 16, "nodes_created": 8, "nodes_updated": 0, "edges_created": 5, "merged": 0, "forgotten": 0}}
+{"type": "session", "n": 1, "gap_days": 10.0}
+{"type": "turn", "role": "user", "session": 1}
+{"type": "turn", "role": "assistant", "session": 1}
+{"type": "turn", "role": "user", "session": 1}
+{"type": "turn", "role": "assistant", "session": 1}
+{"type": "turn", "role": "user", "session": 1}
+{"type": "turn", "role": "assistant", "session": 1}
+{"type": "turn", "role": "user", "session": 1}
+{"type": "turn", "role": "assistant", "session": 1}
+{"type": "turn", "role": "user", "session": 1}
+{"type": "turn", "role": "assistant", "session": 1}
+{"type": "turn", "role": "user", "session": 1}
+{"type": "turn", "role": "assistant", "session": 1}
+{"type": "turn", "role": "user", "session": 1}
+{"type": "turn", "role": "assistant", "session": 1}
+{"type": "turn", "role": "user", "session": 1}
+{"type": "turn", "role": "assistant", "session": 1}
+{"type": "consolidated", "session": 1, "report": {"processed_events": 16, "nodes_created": 7, "nodes_updated": 8, "edges_created": 4, "merged": 4, "forgotten": 0}}
+{"type": "session", "n": 2, "gap_days": 20.0}
+{"type": "turn", "role": "user", "session": 2}
+{"type": "turn", "role": "assistant", "session": 2}
+{"type": "turn", "role": "user", "session": 2}
+{"type": "turn", "role": "assistant", "session": 2}
+{"type": "turn", "role": "user", "session": 2}
+{"type": "turn", "role": "assistant", "session": 2}
+{"type": "turn", "role": "user", "session": 2}
+{"type": "turn", "role": "assistant", "session": 2}
+{"type": "turn", "role": "user", "session": 2}
+{"type": "turn", "role": "assistant", "session": 2}
+{"type": "turn", "role": "user", "session": 2}
+{"type": "turn", "role": "assistant", "session": 2}
+{"type": "turn", "role": "user", "session": 2}
+{"type": "turn", "role": "assistant", "session": 2}
+{"type": "turn", "role": "user", "session": 2}
+{"type": "turn", "role": "assistant", "session": 2}
+{"type": "consolidated", "session": 2, "report": {"processed_events": 16, "nodes_created": 6, "nodes_updated": 15, "edges_created": 5, "merged": 7, "forgotten": 0}}
+{"type": "check", "name": "recall_probes", "passed": true}
+{"type": "check", "name": "behavior", "passed": true}
+{"type": "check", "name": "dedup", "passed": true}
+{"type": "check", "name": "importance", "passed": true}
+{"type": "check", "name": "integrity", "passed": true}
+{"type": "check", "name": "lifecycle", "passed": true}
+{"type": "status", "status": "passed"}
