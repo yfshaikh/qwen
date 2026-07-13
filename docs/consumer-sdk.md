@@ -1,97 +1,247 @@
-# Consumer SDK & exported types
+# Engram — how it works & SDK guide
 
-**Status:** superseded / implemented (qwen side, 2026-07-11).
+Engram is an **in-process learner-memory library**. A host app (tutor, notes,
+quizzes) feeds it learning events; Engram maintains a per-learner knowledge
+graph and returns a token-budgeted recall block for the next turn.
 
-This 2026-06-30 wishlist is **implemented** (qwen / Engram side). Local agent
-plan/spec notes (not in git): `docs/superpowers/specs/memory-v2/2026-07-11-consumer-sdk-design.md`,
-`docs/superpowers/plans/2026-07-11-consumer-sdk.md`.
-
-**Shipped on the qwen / Engram side:** typed top-level exports + `py.typed`,
-typed facade returns, `EngramHost` runtime, mountable FastAPI `memory_router`,
-and generated TS types. **Marfini consumption** (install from `engram-poc`,
-swap glue for `EngramHost` + router) is still pending.
-
-For the embed snippet, see the README **"Embedding Engram"** section.
+For internals (ports, Keeper phases, schema), see [ARCHITECTURE.md](ARCHITECTURE.md).
+For the original product vision, see [DESIGN.md](DESIGN.md).
 
 ---
 
-## Historical wishlist (2026-06-30)
+## How it works
 
-The sections below are the original enhancement request, kept for context.
-Do not treat them as the live contract — the shipped surface above is authoritative.
+```text
+  Host turn                    Offline / async
+  ─────────                    ───────────────
+  log_turn / ingest  ──►  pending events
+                                │
+                         consolidate / consolidate_soon
+                                │
+                                ▼
+                         knowledge graph
+                         (nodes, edges, evidence)
+                                │
+  recall(query, budget) ◄───────┘
+       │
+       ▼
+  text_block (+ subgraph) → inject into tutor prompt
+```
 
-### The problem
-Engram is consumed as an embedded pip dependency — the host calls the `Engram`
-facade in-process. Today the public surface is effectively just that facade; the
-data **types are private**, so a consumer that wants typed access, or wants to
-expose Engram data over its own HTTP API, has to **replicate Engram's types in
-its own code**. In Marfini that meant defining the same shapes twice — once as
-Pydantic models in `api/routes/memory_routes.py`, again as TS interfaces in
-`frontend/src/modules/memory/types.ts` — both hand-copied from Engram internals.
-Every schema change now has to be mirrored in three places.
+1. **Ingest** — append `LearningEvent`s (utterances, tutor explanations, notes,
+   quiz outcomes). They sit as pending evidence until consolidation.
+2. **Consolidate (Keeper)** — LLM-backed offline pass: extract concepts, link,
+   merge duplicates, decay/prune. Expensive work stays off the live turn.
+3. **Recall** — embed the query, score nodes (recency / importance / relevance),
+   walk edges, fill a token budget. Returns a prompt-ready `text_block` plus a
+   typed subgraph. No chat LLM on this path.
 
-### Concrete friction (current state)
-- **Top-level package exports only `Engram`.** `engram/__init__.py` has
-  `__all__ = ["Engram"]`; data classes live in `engram.core.models` and the
-  HTTP request/response models in `engram.app.schemas`. There's no blessed
-  public path for the return types — consumers reach into internal modules.
-- **No `py.typed` marker.** Even when a consumer imports Engram's classes,
-  downstream type checkers (mypy/pyright) treat the package as untyped, so no
-  type information propagates.
-- **The facade returns loosely-typed data:**
-  - `recall()` → `RecallResult(text_block: str, subgraph: dict[str, Any])` — the
-    subgraph (nodes with `score` + `scores{recency,importance,relevance}`, and
-    edges) is an untyped dict; consumers reverse-engineer the shape.
-  - `graph()` → `GraphView`, whose `nodes`/`edges` are `list[dict]`, not
-    `list[Node]`/`list[Edge]`.
-  - `audit()` → `list[dict]`.
-  So even the typed-looking returns bottom out in dicts.
-- **HTTP schemas aren't reusable.** `engram/app/schemas.py` already defines clean
-  Pydantic models (`GraphResponse`, `GraphNode`, `GraphEdge`, `GraphEvidence`,
-  `AuditRow`, `ReportOut`, …), but they're bound to Engram's own FastAPI app —
-  not exported for a host app to mount or reuse as response models.
-- **No shared/published TS types.** The console's `web/src/types.ts` mirrors the
-  same shapes, but there's nothing a JS/TS consumer can install or codegen from,
-  so the interfaces get hand-copied a third time.
+The graph is the source of truth. The live tutor should not re-read raw chat
+history for long-term memory.
 
-### Desired direction
-A stable, typed, low-friction consumer SDK:
+---
 
-1. **Export public types from the top level + add `py.typed`.** Re-export the
-   ingest/return types (`LearningEvent`, `Node`, `Edge`, `Evidence`,
-   `RecallResult`, `GraphView`, a typed `Subgraph`/`ScoredNode`, `AuditRow`,
-   `ConsolidateReport`, the `*Type` enums) from `engram/__init__.py` so
-   `from engram import RecallResult, GraphView, ...` works, and ship a `py.typed`
-   marker so those types actually reach consumers' checkers.
-2. **Return typed objects, not dicts.** `graph()` → `GraphView` with
-   `nodes: list[Node]` / `edges: list[Edge]`; `RecallResult.subgraph` gets a real
-   type (`Subgraph{ nodes: list[ScoredNode], edges: list[Edge] }`); `audit()` →
-   `list[AuditRow]`. One canonical model set shared by the facade **and** the HTTP
-   app — collapse the `core.models` ↔ `app.schemas` duplication (share the core
-   models, or generate the Pydantic layer from them).
-3. **Ship reusable API building blocks.** So a host never re-declares response
-   models: export the Pydantic response models for reuse, and/or provide a
-   ready-made, auth-injectable FastAPI `APIRouter` (graph / audit / recall /
-   health) the host mounts with its own auth dependency. Marfini's
-   `memory_routes.py` would then be a thin auth wrapper, not a re-implementation.
-4. **Publish/generate TS types.** Emit an OpenAPI schema from the HTTP app (or
-   JSON Schema from the Pydantic models) and generate TS types from it — shipped
-   as a small `@engram/types` package or a committed generated file. Kills the
-   hand-copied `types.ts`.
+## Install
 
-### Priority / sizing
-- **Cheap, high value:** (1) top-level exports + `py.typed`. Immediately removes
-  "import from internals" and gives Python consumers types for free.
-- **Medium:** (2) typed facade returns + collapsing the core/app model
-  duplication. Touches internals; eval + tests must stay green.
-- **Medium:** (4) TS generation from OpenAPI — removes the frontend duplication.
-- **Larger:** (3) a mountable, auth-injectable router — best DX, but a bigger
-  API-design commitment; do after (1)/(2).
+```bash
+pip install "engram @ git+https://github.com/yfshaikh/qwen.git@engram-poc"
+# or a feature branch, e.g. @consumer-sdk
+```
 
-### Motivating example (Marfini)
-`api/routes/memory_routes.py` re-declares `GraphResponse` / `GraphNode` /
-`GraphEdge` / `GraphEvidence` / `AuditRow` as Pydantic;
-`frontend/src/modules/memory/types.ts` re-declares them as TS. With (1)+(2) the
-backend imports Engram's models directly; with (4) the frontend imports generated
-types; with (3) the whole `memory_routes` graph/audit/recall surface collapses to
-mounting Engram's router behind `get_current_user`.
+Requires Python 3.12+, Postgres with pgvector, and the usual model/API keys
+(see root [README.md](../README.md)).
+
+Public imports (stable):
+
+```python
+from engram import (
+    Engram, EngramHost, DisabledEngram,
+    LearningEvent, Node, Edge, Evidence,
+    NodeType, EdgeType, EvidenceKind,
+    RecallResult, Subgraph, ScoredNode,
+    GraphView, GraphNode, GraphEdge, AuditRow,
+    ConsolidationReport,
+)
+```
+
+Prefer `engram` top-level. Treat `engram.core.*` / `engram.adapters.*` as
+internal unless you are extending Engram itself.
+
+---
+
+## Using the SDK (`EngramHost`)
+
+`EngramHost` is the embedding runtime. Construction never raises; `start()` is
+where connect failures surface (logged once, then latched disabled).
+
+### Lifespan
+
+```python
+from engram import EngramHost
+
+host = EngramHost.from_env(
+    database_url=os.environ["ENGRAM_DATABASE_URL"],
+    model_extractor="qwen/qwen3.5-27b",
+    model_reflector="qwen/qwen3.5-27b",
+    model_embedder="text-embedding-3-small",
+    model_tutor="qwen/qwen3.5-27b",
+    _env_file=None,  # optional: ignore cwd .env; pass secrets via env/kwargs
+)
+
+# FastAPI example
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    await host.start()   # opens pool; False => memory disabled for this process
+    try:
+        yield
+    finally:
+        await host.aclose()  # drains consolidate_soon / log_* tasks, closes pool
+```
+
+| API | Role |
+|---|---|
+| `host.enabled` | `True` after a successful `start()` |
+| `host.memory` | Live `Engram` **or** `DisabledEngram` — never `None` |
+| `await host.start()` | Connect; idempotent while live; latches on failure |
+| `await host.aclose()` | Cancel owned tasks, close pool, allow restart |
+
+When disabled, every memory verb returns typed empties and does not raise.
+Call sites need no `if eng is None` guards.
+
+### Log a tutor turn
+
+```python
+await host.log_turn(
+    learner_id,
+    user_text=user_text,
+    tutor_reply=reply,
+    refs={"lesson_id": lesson_id},
+)
+```
+
+Builds utterance + tutor_explanation events, skips blanks, shields the write,
+never raises into your turn. Also: `log_quiz`, `log_note`.
+
+### Consolidate after a session
+
+```python
+# once per session close (not per turn) — coalesces bursts per learner
+host.consolidate_soon(learner_id)
+
+# UI "updating memory" indicator:
+host.is_consolidating(learner_id)
+```
+
+Or await a full run: `await host.memory.consolidate(learner_id)`.
+
+### Recall into the prompt
+
+```python
+res = await host.memory.recall(learner_id, query, budget=600)
+prompt_block = res.text_block          # str
+nodes = res.subgraph["nodes"]          # list[ScoredNode] (TypedDict / dict)
+```
+
+### Direct facade (tests / advanced)
+
+```python
+from engram import Engram
+eng = Engram(storage=..., llm=..., embedder=...)
+await eng.connect()
+await eng.ingest([...])
+await eng.consolidate(learner_id)
+await eng.aclose()
+```
+
+Hosts should prefer `EngramHost` so degradation and scheduling stay consistent.
+
+---
+
+## HTTP surface & shared types
+
+### Recommended pattern (host-owned routes)
+
+Keep auth and routing in your app. Import Engram’s **response models** so you
+do not re-declare graph/audit shapes:
+
+```python
+from engram.integrations.fastapi import (
+    MemGraphResponse, MemStatusResponse, MemAuditResponse,
+    MemHealthResponse, RecallProbeRequest, RecallProbeResponse,
+)
+from engram import EngramHost  # via your get_host()
+
+@router.get("/memory/graph", response_model=MemGraphResponse)
+async def my_graph(user=Depends(auth)):
+    host = get_host()
+    if not host.enabled:
+        return {"enabled": False, "nodes": [], "edges": []}
+    try:
+        gv = await host.memory.graph(user.uid)
+        return {"enabled": True, "nodes": gv.nodes, "edges": gv.edges}
+    except Exception:
+        return {"enabled": False, "nodes": [], "edges": []}
+```
+
+Same idea for `/status` (`host.is_consolidating`), admin audit/health/recall-probe.
+
+### Optional: mount Engram’s router
+
+```python
+from engram.integrations.fastapi import memory_router
+
+app.include_router(memory_router(
+    get_host,
+    learner_id_dep=my_uid_dep,
+    admin_dep=my_admin_dep,   # omit => admin routes are not registered
+    prefix="/memory",
+))
+```
+
+Useful for greenfield hosts. Prefer host-owned handlers when you already have
+auth middleware and want the control flow visible in-repo.
+
+### TypeScript types
+
+Generated from the same Pydantic models:
+
+```bash
+# in the engram repo
+python -m engram.export_types   # → packages/engram-types/index.d.ts
+```
+
+**Do not** depend on `github:…#branch&path:…` — npm cannot install a git
+subdirectory at a branch reliably. Until `@engram/types` is on the npm registry:
+
+1. Vendor `packages/engram-types/index.d.ts` into your frontend, or
+2. Sync from GitHub raw, e.g.
+
+```bash
+curl -fsSL \
+  "https://raw.githubusercontent.com/yfshaikh/qwen/engram-poc/packages/engram-types/index.d.ts" \
+  -o src/types/engram-types.ts
+```
+
+See `packages/engram-types/README.md`.
+
+---
+
+## Environment
+
+| Variable | Purpose |
+|---|---|
+| `ENGRAM_DATABASE_URL` / `DATABASE_URL` | Postgres + pgvector DSN |
+| `OPENROUTER_API_KEY` (or provider keys) | Chat models |
+| `OPENAI_API_KEY` | Embeddings (default stack) |
+| `ENGRAM_MODEL_*` | Tutor / extractor / reflector / embedder slugs |
+
+`EngramHost.from_env(**kwargs)` lets the host override models and DSN from its
+own config file (kwargs outrank env).
+
+---
+
+## Versioning
+
+`engram.__version__` tracks the library (currently `0.1.0`). Pin the git ref
+your host installs (`@engram-poc`, a release tag, etc.) and bump intentionally
+when you take SDK changes.

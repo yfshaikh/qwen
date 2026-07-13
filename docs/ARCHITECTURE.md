@@ -5,6 +5,9 @@
 > each phase lands. Diagrams are intentionally small and scoped — one per system
 > or subsystem — so each is easy to hold in your head.
 >
+> **Embedding Engram in a host app?** Start with [consumer-sdk.md](consumer-sdk.md)
+> (how it works + `EngramHost` usage). This file is the internal architecture.
+>
 > **Status legend:** ✅ built & tested · 🟡 designed, not yet built · ⬜ future phase
 >
 > | Phase | Area | Status |
