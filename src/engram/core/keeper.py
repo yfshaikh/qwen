@@ -30,7 +30,7 @@ from engram.core.mastery import decay_salience, ewma, observation_for, update_co
 from engram.core.ports import EmbedderPort, LLMPort, StoragePort
 from engram.core.models import Edge, EdgeType, Evidence, EvidenceKind, Message, Node, NodeType
 from engram.core.recall import cosine_similarity
-from engram.core.text import normalize_label, token_jaccard
+from engram.core.text import canonical_label, normalize_label, token_jaccard
 
 _JACCARD_MERGE = 0.8  # ponytail: fixed; promote to KeeperParams if a sweep ever tunes it
 
@@ -219,6 +219,7 @@ class Keeper:
                     plan.audit.append(AuditEntry(
                         op="merge",
                         rationale=f"merged {cand.label!r} into {w.node.label!r} (label match)"))
+                    self._adopt_label(w, cand)
                     return nid
         best_id, best_sim = None, -1.0
         for nid, w in work.items():
@@ -230,12 +231,22 @@ class Keeper:
             if sim > best_sim:
                 best_sim, best_id = sim, nid
         if best_id is not None and best_sim >= self.p.tau_high:
+            self._adopt_label(work[best_id], cand)
             return best_id
         if best_id is not None and best_sim > self.p.tau_low:
             if await self._reflector_confirm(cand, work[best_id].node):
                 plan.audit.append(AuditEntry(op="merge", rationale=f"merged {cand.label}"))
+                self._adopt_label(work[best_id], cand)
                 return best_id
         return None
+
+    @staticmethod
+    def _adopt_label(w, cand) -> None:
+        """On merge, keep the more canonical of the two surface labels so display
+        names stay stable and full (abbreviations lose to their expansion). The
+        node is already marked touched by the caller, so a real node's new label
+        persists via node_updates; a tmp node's via its new_nodes INSERT."""
+        w.node.label = canonical_label(w.node.label, cand.label)
 
     async def _reflector_confirm(self, cand, node) -> bool:
         try:
@@ -332,6 +343,7 @@ class Keeper:
                 hi = keep if (keep.confidence or 0.0) >= (drop.confidence or 0.0) else drop
                 await self.storage.merge_nodes(
                     learner_id, keep.id, drop.id,
+                    label=canonical_label(keep.label, drop.label),
                     mastery=hi.mastery,
                     confidence=max(keep.confidence or 0.0, drop.confidence or 0.0),
                     salience=max(keep.salience or 0.0, drop.salience or 0.0),

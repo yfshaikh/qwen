@@ -8,7 +8,7 @@ from typing import Any
 
 from engram.core.recall import Recall, RecallWeights
 from engram.core.tokens import heuristic_token_count
-from engram.eval.scenario import Probe
+from engram.eval.scenario import Probe, alias_forms
 from engram.tutor.prompt import compose
 
 
@@ -21,24 +21,28 @@ class ProbeScore:
     leaked: bool
 
 
-def _rank_of(expected: str, ordered: list[str]) -> int | None:
-    needle = expected.lower()
+def _rank_of(expected: str, ordered: list[str],
+             aliases: dict[str, list[str]] | None = None) -> int | None:
+    needles = [f.lower() for f in alias_forms(expected, aliases)]
     for i, label in enumerate(ordered, start=1):
-        if needle in label.lower():
+        low = label.lower()
+        if any(n in low for n in needles):
             return i
     return None
 
 
-def score_probe(ordered_labels: list[str], probe: Probe) -> ProbeScore:
+def score_probe(ordered_labels: list[str], probe: Probe,
+                aliases: dict[str, list[str]] | None = None) -> ProbeScore:
     penalty = len(ordered_labels) + 1
     hit: list[str] = []
     missing: list[str] = []
     ranks: dict[str, int] = {}
     for exp in probe.expect_nodes:
-        r = _rank_of(exp, ordered_labels)
+        r = _rank_of(exp, ordered_labels, aliases)
         ranks[exp] = r if r is not None else penalty
         (hit if r is not None else missing).append(exp)
-    leaked = any(_rank_of(m, ordered_labels) == 1 for m in probe.mastered_not_expected)
+    leaked = any(_rank_of(m, ordered_labels, aliases) == 1
+                 for m in probe.mastered_not_expected)
     return ProbeScore(query=probe.query, hit=hit, missing=missing, ranks=ranks, leaked=leaked)
 
 
@@ -53,6 +57,7 @@ async def run_recall_arm(
     hops: int = 2,
     fanout: int = 10,
     budget: int = 800,
+    aliases: dict[str, list[str]] | None = None,
 ) -> list[tuple[Probe, ProbeScore]]:
     recall = Recall(
         storage,
@@ -67,7 +72,7 @@ async def run_recall_arm(
     for probe in probes:
         res = await recall.run(learner_id, probe.query, budget)
         labels = [n["label"] for n in res.subgraph["nodes"]]
-        out.append((probe, score_probe(labels, probe)))
+        out.append((probe, score_probe(labels, probe, aliases)))
     return out
 
 

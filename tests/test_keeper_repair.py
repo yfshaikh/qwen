@@ -115,3 +115,22 @@ async def test_repair_reflector_no_is_not_reasked():
     out = await eng.repair_merges("L")
     assert out["merged"] == 0
     assert llm.calls == 1  # asked once, not re-asked on the next while-pass
+
+
+async def test_repair_adopts_canonical_label():
+    # Two duplicates (parallel embeddings -> cosine 1.0 >= tau_high) with an
+    # abbreviated vs full label. Repair keeps the older id but the FULLER label.
+    storage = FakeStorage()
+    old = await storage.insert_node(Node(
+        learner_id="L", type=NodeType.CONCEPT, label="EM Induction",
+        salience=0.5, embedding=[1.0, 0.0], created_at=_t(0)))
+    await storage.insert_node(Node(
+        learner_id="L", type=NodeType.CONCEPT, label="Electromagnetic Induction",
+        salience=0.5, embedding=[1.0, 0.0], created_at=_t(5)))
+    eng = Engram(storage=storage, llm=_NoLLM(), embedder=FakeEmbedder(dim=2))
+    out = await eng.repair_merges("L")
+    assert out["merged"] == 1
+    live = await storage.get_live_nodes("L")
+    assert len(live) == 1
+    assert live[0].id == old                          # older node id kept
+    assert live[0].label == "Electromagnetic Induction"  # canonical label adopted

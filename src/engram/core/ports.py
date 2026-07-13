@@ -81,6 +81,7 @@ class StoragePort(Protocol):
         keep_id: str,
         drop_id: str,
         *,
+        label: str,
         mastery: float | None,
         confidence: float | None,
         salience: float | None,

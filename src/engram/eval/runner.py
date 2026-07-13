@@ -150,6 +150,7 @@ async def execute_run(
 
         results = []
         for rc in resolved:
+            emit({"type": "check_start", "name": rc.name, "needs": rc.needs})
             spec_params = next((c.params for c in scenario.checks if c.name == rc.name), {})
             ctx = EvalContext(eng=run_eng, scenario=scenario, learner_id=learner_id,
                               snapshots=snapshots, transcript=transcript, clock=clock,

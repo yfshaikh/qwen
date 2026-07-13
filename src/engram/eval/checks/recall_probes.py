@@ -15,8 +15,9 @@ async def recall_probes(ctx: EvalContext) -> CheckResult:
                   budget=s.recall_default_budget)
     else:
         weights, kw = RecallWeights(), {}
+    aliases = getattr(ctx.scenario, "aliases", None)
     scored = await run_recall_arm(ctx.eng.storage, ctx.eng.embedder, ctx.learner_id,
-                                  ctx.scenario.probes, weights, **kw)
+                                  ctx.scenario.probes, weights, aliases=aliases, **kw)
     metrics = aggregate_recall([sc for _, sc in scored])
     details = [f"probe {sc.query!r}: missing {sc.missing}" for _, sc in scored if sc.missing]
     return CheckResult(name="recall_probes", metrics=metrics,

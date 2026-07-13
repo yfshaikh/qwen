@@ -35,6 +35,20 @@ class Scenario:
     sessions: list[Session]
     probes: list[Probe]
     checks: list[CheckSpec] = field(default_factory=list)
+    # Acceptable surface variants per expected concept label, so recall/lifecycle
+    # checks verify concept retention rather than the LLM's cosmetic label pick
+    # (which merges canonicalize but can still vary). {canonical: [variant, ...]}.
+    aliases: dict[str, list[str]] = field(default_factory=dict)
+
+
+def alias_forms(expected: str, aliases: dict[str, list[str]] | None) -> list[str]:
+    """All acceptable surface forms for an expected label: the label itself plus
+    any declared aliases (canonical-key lookup is case-insensitive)."""
+    forms = [expected]
+    for key, variants in (aliases or {}).items():
+        if key.lower() == expected.lower():
+            forms.extend(variants)
+    return forms
 
 
 def load_scenario(path: str | Path) -> Scenario:
@@ -64,6 +78,8 @@ def load_scenario(path: str | Path) -> Scenario:
                     expect_nodes=list(p.get("expect_nodes", [])),
                     mastered_not_expected=list(p.get("mastered_not_expected", [])))
               for p in data["probes"]]
+    aliases = {str(k): [str(x) for x in (v or [])]
+               for k, v in (data.get("aliases") or {}).items()}
     return Scenario(id=data["id"], persona=data.get("persona", ""),
                     hidden_state=data.get("hidden_state", {}),
-                    sessions=sessions, probes=probes, checks=checks)
+                    sessions=sessions, probes=probes, checks=checks, aliases=aliases)

@@ -393,9 +393,10 @@ class PostgresStorage:
                     )
                 for n in plan.node_updates:
                     await conn.execute(
-                        "UPDATE engram_nodes SET mastery=$1, confidence=$2, salience=$3,"
-                        " importance=$4, last_seen_at=$5, forgotten_at=$6 WHERE id=$7",
-                        n.mastery, n.confidence, n.salience, n.importance,
+                        "UPDATE engram_nodes SET label=$1, mastery=$2, confidence=$3,"
+                        " salience=$4, importance=$5, last_seen_at=$6, forgotten_at=$7"
+                        " WHERE id=$8",
+                        n.label, n.mastery, n.confidence, n.salience, n.importance,
                         n.last_seen_at, n.forgotten_at, n.id,
                     )
                 for mp in plan.mastery_history:
@@ -420,7 +421,7 @@ class PostgresStorage:
                     )
 
     async def merge_nodes(self, learner_id: str, keep_id: str, drop_id: str, *,
-                          mastery, confidence, salience, importance,
+                          label, mastery, confidence, salience, importance,
                           rationale: str) -> None:
         """Repair-merge drop into keep: union evidence, resolve edge collisions,
         repoint drop's edges, update keep's scores, soft-forget drop. One
@@ -477,9 +478,9 @@ class PostgresStorage:
                     "UPDATE engram_edges SET target_id=$1 WHERE target_id=$2",
                     keep_id, drop_id)
                 await conn.execute(
-                    "UPDATE engram_nodes SET mastery=$1, confidence=$2, salience=$3,"
-                    " importance=$4 WHERE id=$5",
-                    mastery, confidence, salience, importance, keep_id)
+                    "UPDATE engram_nodes SET label=$1, mastery=$2, confidence=$3,"
+                    " salience=$4, importance=$5 WHERE id=$6",
+                    label, mastery, confidence, salience, importance, keep_id)
                 await conn.execute(
                     "UPDATE engram_nodes SET forgotten_at=now() WHERE id=$1", drop_id)
                 audit = rationale

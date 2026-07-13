@@ -31,3 +31,14 @@ async def test_recall_probes_check_hits():
                       transcript=[], clock=None, params={})
     res = await run_check(get_check("recall_probes"), ctx)
     assert res.metrics["node_hit_rate"] == 1.0 and res.passed
+
+
+def test_score_probe_matches_via_alias():
+    from engram.eval.arms import score_probe
+    from engram.eval.scenario import Probe
+    probe = Probe(query="q", expect_nodes=["Electromagnetic induction"])
+    labels = ["EM Induction", "Ohm's Law"]           # only the abbreviation present
+    no_alias = score_probe(labels, probe)
+    assert no_alias.missing == ["Electromagnetic induction"]   # exact miss
+    aliased = score_probe(labels, probe, {"Electromagnetic induction": ["EM induction"]})
+    assert aliased.hit == ["Electromagnetic induction"] and not aliased.missing

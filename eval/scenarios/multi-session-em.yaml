@@ -38,6 +38,13 @@ probes:
     expect_nodes: [Faraday's law]
   - query: "how do transformers work?"
     expect_nodes: [Transformer]
+# Merges now keep the canonical (fuller) label, but a real LLM can still emit a
+# novel surface form. These aliases let recall/lifecycle verify concept
+# retention rather than the exact string the extractor happened to pick.
+aliases:
+  Electromagnetic induction: [EM induction]
+  Faraday's law: [Faraday law]
+  Transformer: [Transformers]
 checks:
   - recall_probes
   - behavior

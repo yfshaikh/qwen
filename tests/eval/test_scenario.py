@@ -76,3 +76,24 @@ def test_scenario_v2_defaults_backcompat(tmp_path):
 def test_scenario_v2_negative_gap_rejected(tmp_path):
     with pytest.raises(ValueError):
         load_scenario(_write(tmp_path, BASE + "sessions: [{intent: a, gap_days: -1}]\n"))
+
+
+def test_alias_forms_case_insensitive():
+    from engram.eval.scenario import alias_forms
+    aliases = {"Electromagnetic induction": ["EM induction", "induction"]}
+    forms = alias_forms("electromagnetic INDUCTION", aliases)  # key match is ci
+    assert "EM induction" in forms and "induction" in forms
+    assert forms[0] == "electromagnetic INDUCTION"            # self always first
+    assert alias_forms("Faraday's law", aliases) == ["Faraday's law"]  # no alias
+    assert alias_forms("X", None) == ["X"]                    # None-safe
+
+
+def test_load_scenario_reads_aliases(tmp_path):
+    from engram.eval.scenario import load_scenario
+    p = tmp_path / "s.yaml"
+    p.write_text(
+        "id: s\n"
+        "probes:\n  - query: q\n    expect_nodes: [Foo]\n"
+        "aliases:\n  Foo: [F, Foobar]\n")
+    sc = load_scenario(str(p))
+    assert sc.aliases == {"Foo": ["F", "Foobar"]}

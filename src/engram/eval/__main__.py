@@ -13,6 +13,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import json
+import sys
 import uuid
 from pathlib import Path
 
@@ -107,9 +108,40 @@ async def _run(args) -> None:
         sc = load_scenario(args.scenario)
         _, run_dir = run_store.new_run(sc.id)
         checks = args.checks.split(",") if args.checks else None
+
+        turns = {"n": 0}
+
+        def emit(e: dict) -> None:
+            # persist every event, and print a live line to stderr so a long
+            # real-LLM run isn't a silent black box.
+            run_store.append_event(run_dir, e)
+            t = e.get("type")
+            if t == "session":
+                turns["n"] = 0
+                print(f"session {e['n']} (gap {e['gap_days']:g}d) ",
+                      end="", file=sys.stderr, flush=True)
+            elif t == "turn":
+                turns["n"] += 1
+                print(".", end="", file=sys.stderr, flush=True)
+            elif t == "consolidated":
+                r = e["report"]
+                print(f" consolidated (+{r['nodes_created']} nodes, {r['merged']} merged,"
+                      f" {r['forgotten']} forgotten)", file=sys.stderr, flush=True)
+            elif t == "check_start":
+                extra = " (replays turns — slow, spends LLM)" if e.get("needs") == "live" else ""
+                print(f"  running {e['name']}{extra}...", file=sys.stderr, flush=True)
+            elif t == "check":
+                print(f"  check {e['name']}: {'pass' if e['passed'] else 'FAIL'}",
+                      file=sys.stderr, flush=True)
+            elif t == "error":
+                print(f"  ! {e['message']}", file=sys.stderr, flush=True)
+            elif t == "status" and e.get("status") not in (None, "running"):
+                print(f"[{e['status']}]", file=sys.stderr, flush=True)
+
+        print(f"running {sc.id} -> {run_dir}", file=sys.stderr, flush=True)
         data = await execute_run(
             eng, sc, run_dir, checks=checks, max_cost_usd=args.budget_usd,
-            clock=SimClock(), emit=lambda e: run_store.append_event(run_dir, e))
+            clock=SimClock(), emit=emit)
         for c in data["checks"]:
             mark = "PASS" if c["passed"] else "FAIL"
             print(f"[{mark}] {c['name']}  {c['metrics']}")

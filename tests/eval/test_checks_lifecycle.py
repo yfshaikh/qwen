@@ -92,3 +92,47 @@ async def test_integrity_flags_unconsolidated_leftovers():
     snap = _snap(0, [])
     res = await run_check(get_check("integrity"), _ctx([snap], {}, eng=eng))
     assert not res.passed  # pending events after a run mean consolidation didn't drain
+
+
+async def test_lifecycle_kept_matches_via_scenario_alias():
+    # The concept survives under an abbreviated label; a declared alias lets the
+    # 'kept' expectation pass (concept retention, not exact string).
+    from types import SimpleNamespace
+    last = _snap(0, [_node("1", "EM Induction")])
+    params = {"expect": {"kept": ["Electromagnetic induction"]}}
+    ctx = EvalContext(
+        eng=None, scenario=SimpleNamespace(aliases={"Electromagnetic induction": ["EM Induction"]}),
+        learner_id="L", snapshots=[last], transcript=[], clock=None, params=params)
+    res = await run_check(get_check("lifecycle"), ctx)
+    assert res.passed, res.details
+
+
+async def test_lifecycle_kept_without_alias_still_fails():
+    from types import SimpleNamespace
+    last = _snap(0, [_node("1", "EM Induction")])
+    params = {"expect": {"kept": ["Electromagnetic induction"]}}
+    ctx = EvalContext(eng=None, scenario=SimpleNamespace(aliases={}), learner_id="L",
+                      snapshots=[last], transcript=[], clock=None, params=params)
+    res = await run_check(get_check("lifecycle"), ctx)
+    assert not res.passed  # no alias -> abbreviation doesn't satisfy the full label
+
+
+async def test_lifecycle_prefers_live_node_over_forgotten_alias_dup():
+    # Concept appears twice: old forgotten node under the abbreviation, live node
+    # under the canonical label. 'kept' must pass (live exists); 'forgotten' must
+    # NOT falsely pass off the dead dup. Order: forgotten dup first in the list.
+    from types import SimpleNamespace
+    nodes = [_node("1", "EM Induction", forgotten="2026-02-01", salience=0.01),
+             _node("2", "Electromagnetic Induction", salience=1.0)]
+    last = _snap(0, nodes)
+    scenario = SimpleNamespace(aliases={"Electromagnetic induction": ["EM Induction"]})
+
+    kept = await run_check(get_check("lifecycle"), EvalContext(
+        eng=None, scenario=scenario, learner_id="L", snapshots=[last],
+        transcript=[], clock=None, params={"expect": {"kept": ["Electromagnetic induction"]}}))
+    assert kept.passed, kept.details
+
+    forgot = await run_check(get_check("lifecycle"), EvalContext(
+        eng=None, scenario=scenario, learner_id="L", snapshots=[last],
+        transcript=[], clock=None, params={"expect": {"forgotten": ["Electromagnetic induction"]}}))
+    assert not forgot.passed  # a live variant exists -> concept is NOT forgotten

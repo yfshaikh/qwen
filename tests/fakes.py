@@ -252,6 +252,7 @@ class FakeStorage:
         for upd in plan.node_updates:
             existing = self.nodes.get(upd.id)
             if existing is not None:
+                existing.label = upd.label
                 existing.mastery = upd.mastery
                 existing.confidence = upd.confidence
                 existing.salience = upd.salience
@@ -282,7 +283,7 @@ class FakeStorage:
                 if e.id in ids:
                     e.consolidated_at = stamp
 
-    async def merge_nodes(self, learner_id, keep_id, drop_id, *, mastery,
+    async def merge_nodes(self, learner_id, keep_id, drop_id, *, label, mastery,
                           confidence, salience, importance, rationale) -> None:
         for ev in self.evidence:
             if ev.node_id == drop_id:
@@ -318,6 +319,7 @@ class FakeStorage:
                     dropped_bits.append(f"{e.type.value}@{e.weight:.2f}")
         self.edges = rest + list(best.values())
         keep = self.nodes[keep_id]
+        keep.label = label
         keep.mastery, keep.confidence = mastery, confidence
         keep.salience, keep.importance = salience, importance
         self.nodes[drop_id].forgotten_at = datetime.now(timezone.utc)

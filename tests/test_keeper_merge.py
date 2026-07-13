@@ -126,3 +126,49 @@ async def test_lexical_merge_does_not_cross_node_types():
     live = await storage.get_live_nodes("L")
     assert sorted(n.type.value for n in live) == ["concept", "goal"]
     assert all(n.label == "electromagnetic induction" for n in live)
+
+
+# --- canonical label on merge (Option A, 2026-07-13) -------------------------
+# FakeEmbedder returns constant (parallel) vectors -> cosine 1.0 -> two same-type
+# candidates merge via tau_high regardless of label, so these isolate which label
+# survives the merge.
+from tests.fakes import FakeEmbedder  # noqa: E402
+
+
+async def _consolidate_fake(llm, storage, learner="L"):
+    eng = Engram(storage=storage, llm=llm, embedder=FakeEmbedder(dim=8))
+    await eng.ingest([LearningEvent(learner_id=learner, type="utterance", text="hi")])
+    return await eng.consolidate(learner)
+
+
+async def test_merge_adopts_fuller_label_across_sessions():
+    storage = FakeStorage()
+    llm = _SeqLLM([_extraction("EM Induction"), _extraction("Electromagnetic Induction")])
+    await _consolidate_fake(llm, storage)
+    await _consolidate_fake(llm, storage)
+    live = await storage.get_live_nodes("L")
+    assert len(live) == 1
+    assert live[0].label == "Electromagnetic Induction"  # abbreviation lost
+
+
+async def test_merge_keeps_fuller_when_abbrev_comes_second():
+    storage = FakeStorage()
+    llm = _SeqLLM([_extraction("Electromagnetic Induction"), _extraction("EM Induction")])
+    await _consolidate_fake(llm, storage)
+    await _consolidate_fake(llm, storage)
+    live = await storage.get_live_nodes("L")
+    assert len(live) == 1
+    assert live[0].label == "Electromagnetic Induction"  # stability: fuller stays
+
+
+async def test_same_batch_merge_adopts_fuller_label():
+    # Same-batch dedup is lexical-only (the cosine path skips tmp nodes), so the
+    # pair must share >=80% tokens to merge: 4 of 5 -> jaccard 0.8. The fuller
+    # (5-token) label wins.
+    storage = FakeStorage()
+    llm = _SeqLLM([_extraction("alpha beta gamma delta",
+                               "alpha beta gamma delta epsilon")])
+    await _consolidate_fake(llm, storage)
+    live = await storage.get_live_nodes("L")
+    assert len(live) == 1
+    assert live[0].label == "alpha beta gamma delta epsilon"
