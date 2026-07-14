@@ -56,6 +56,7 @@ class _S:  # minimal settings stand-in: eval endpoints read only these fields
     keeper_salience_bump = 0.3
     keeper_prune_floor = 0.05
     recall_decay = 0.98
+    recall_history_turns = 10
 
 
 @pytest.fixture

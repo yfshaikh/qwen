@@ -99,3 +99,10 @@ def test_audit_settings(monkeypatch):
 def test_recall_session_buffer_default_on(monkeypatch):
     s = _settings(monkeypatch)
     assert s.recall_session_buffer is True
+
+
+def test_recall_history_turns_default_and_override(monkeypatch):
+    s = _settings(monkeypatch)
+    assert s.recall_history_turns == 10
+    s2 = _settings(monkeypatch, ENGRAM_RECALL_HISTORY_TURNS="4")
+    assert s2.recall_history_turns == 4

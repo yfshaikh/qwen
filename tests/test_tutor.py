@@ -69,6 +69,39 @@ async def test_turn_empty_reply_saves_only_utterance():
     assert frames[-1][1]["reply"] == ""
 
 
+async def test_turn_reads_history_turns_from_settings(monkeypatch):
+    # A non-default ENGRAM_RECALL_HISTORY_TURNS must reach the tutor's turn
+    # limit — proves this is threaded from Settings, not a hardcoded constant.
+    from engram.app.config import Settings
+
+    monkeypatch.setenv("OPENROUTER_API_KEY", "sk-or-test")
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
+    monkeypatch.setenv("DATABASE_URL", "postgresql://engram:engram@localhost:5432/engram")
+    monkeypatch.setenv("ENGRAM_MODEL_TUTOR", "m")
+    monkeypatch.setenv("ENGRAM_MODEL_EXTRACTOR", "m")
+    monkeypatch.setenv("ENGRAM_MODEL_REFLECTOR", "m")
+    monkeypatch.setenv("ENGRAM_MODEL_EMBEDDER", "m")
+    monkeypatch.setenv("ENGRAM_RECALL_HISTORY_TURNS", "2")
+    settings = Settings(_env_file=None)
+
+    llm = FakeLLM(canned_text="ok")
+    eng = Engram(storage=FakeStorage(), llm=llm, embedder=FakeEmbedder(dim=8), settings=settings)
+    messages = [
+        {"role": "user", "content": "m1"},
+        {"role": "assistant", "content": "m2"},
+        {"role": "user", "content": "m3"},
+        {"role": "assistant", "content": "m4"},
+        {"role": "user", "content": "m5"},
+    ]
+    [f async for f in Tutor(eng).turn("a", messages)]
+
+    _, sent = llm.stream_calls[0]
+    # 2 system messages (prefix + memory block) + last 2 conversation turns
+    # (recall_history_turns=2, not the old hardcoded 10 which would keep all 5).
+    assert len(sent) == 4
+    assert [m.content for m in sent[-2:]] == ["m4", "m5"]
+
+
 def test_system_prefix_directs_needs_attention():
     from engram.tutor.prompt import SYSTEM_PREFIX
     assert "Needs attention" in SYSTEM_PREFIX

@@ -76,9 +76,6 @@ async def run_recall_arm(
     return out
 
 
-_MAX_TURNS = 10  # ponytail: mirror Tutor.MAX_TURNS; promote to setting if convos grow
-
-
 @dataclass(slots=True)
 class TurnRecord:
     query: str
@@ -86,13 +83,18 @@ class TurnRecord:
     context: str
 
 
-def format_baseline_context(history: list[dict], n: int = 10) -> str:
+def format_baseline_context(history: list[dict], n: int) -> str:
     recent = history[-n:]
     return "\n".join(f"{h['role']}: {h['content']}" for h in recent)
 
 
+def _history_turns(eng: Any) -> int:
+    s = eng.settings
+    return s.recall_history_turns if s is not None else 10
+
+
 async def _tutor_reply(eng: Any, context: str, history: list[dict]) -> str:
-    prompt = compose(context, history[-_MAX_TURNS:])
+    prompt = compose(context, history[-_history_turns(eng):])
     out = await eng.llm.complete("tutor", prompt)
     return out.text or ""
 
@@ -104,10 +106,11 @@ async def run_behavior_arm(
     mode: str,
     *,
     budget: int = 800,
-    n: int = 10,
+    n: int | None = None,
 ) -> list[TurnRecord]:
     if mode not in ("on", "baseline"):
         raise ValueError(f"mode must be 'on' or 'baseline', got {mode!r}")
+    n = n if n is not None else _history_turns(eng)
     history: list[dict] = []
     records: list[TurnRecord] = []
     for turn in learner_turns:

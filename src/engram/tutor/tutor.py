@@ -10,8 +10,6 @@ from typing import Any
 from engram.core.models import LearningEvent
 from engram.tutor.prompt import compose
 
-MAX_TURNS = 10  # ponytail: constant cap; promote to a setting if conversations get long
-
 
 class Tutor:
     def __init__(self, eng: Any) -> None:
@@ -29,7 +27,9 @@ class Tutor:
         yield "context", {"text_block": res.text_block, "subgraph": res.subgraph}
 
         reply = ""
-        prompt = compose(res.text_block, messages[-MAX_TURNS:])
+        s = self.eng.settings
+        history_turns = s.recall_history_turns if s is not None else 10
+        prompt = compose(res.text_block, messages[-history_turns:])
         async for delta in self.eng.llm.stream("tutor", prompt):
             reply += delta
             yield "delta", {"text": delta}
