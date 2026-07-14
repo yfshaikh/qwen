@@ -80,9 +80,7 @@ def build_extraction_messages(events) -> list[Message]:
     lines = []
     for e in events:
         lines.append(
-            json.dumps(
-                {"type": e.type, "text": e.text, "refs": e.refs, "signals": e.signals}
-            )
+            json.dumps({"type": e.type, "text": e.text, "signals": e.signals})
         )
     user = "Events:\n" + "\n".join(lines) + "\n\nReturn the JSON described above."
     return [Message(role="system", content=_SYSTEM), Message(role="user", content=user)]

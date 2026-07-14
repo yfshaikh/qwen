@@ -41,6 +41,22 @@ class OpenAICompatibleLLM:
             # OpenAI-compatible json_object mode; the prompt itself must describe
             # the schema for the model. (Structured parsing lands in Phase 2.)
             kwargs["response_format"] = {"type": "json_object"}
+        if role == "reflector":
+            # The reflector prompt demands a single "yes"/"no" token (see
+            # keeper.py:_reflector_confirm), so a small cap is safe. Every other
+            # role is left at the provider default — capping extractor/tutor/
+            # student/judge output risks truncating a full JSON graph or a
+            # transcript, which is NOT safe (see Task A6 scope note).
+            #
+            # MEASURED NO-OP on the current stack: eval run 27b8c5a7 recorded
+            # 1773 reflector completion_tokens under this cap (~90-160/call over
+            # 11 confirmed merges). qwen3.7-max is a thinking model — this bounds
+            # only the visible answer ("yes" fits), while thinking tokens bill
+            # unclamped. Kept because it costs nothing and does clamp providers
+            # that cap total output; do NOT cite it as a live token saving. The
+            # reflector's real spend is thinking tokens — batching the confirms
+            # (Phase C) is what would move that number.
+            kwargs["max_tokens"] = 4
 
         resp = await self._client.chat.completions.create(**kwargs)
         text = resp.choices[0].message.content if resp.choices else None

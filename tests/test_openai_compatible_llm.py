@@ -46,7 +46,11 @@ class _FakeClient:
 def _make(recorder):
     return OpenAICompatibleLLM(
         client=_FakeClient(recorder),
-        role_to_model={"tutor": "qwen/tutor-model", "extractor": "qwen/extract-model"},
+        role_to_model={
+            "tutor": "qwen/tutor-model",
+            "extractor": "qwen/extract-model",
+            "reflector": "qwen/reflector-model",
+        },
     )
 
 
@@ -66,6 +70,27 @@ async def test_complete_with_schema_sets_json_response_format():
     llm = _make(rec)
     await llm.complete("extractor", [Message(role="user", content="q")], schema={"x": 1})
     assert rec["kwargs"]["response_format"] == {"type": "json_object"}
+
+
+async def test_complete_caps_max_tokens_for_reflector_only():
+    rec = {}
+    llm = _make(rec)
+    await llm.complete("reflector", [Message(role="user", content="q")])
+    assert rec["kwargs"]["max_tokens"] == 4
+
+
+async def test_complete_does_not_cap_max_tokens_for_extractor():
+    rec = {}
+    llm = _make(rec)
+    await llm.complete("extractor", [Message(role="user", content="q")])
+    assert "max_tokens" not in rec["kwargs"]
+
+
+async def test_complete_does_not_cap_max_tokens_for_tutor():
+    rec = {}
+    llm = _make(rec)
+    await llm.complete("tutor", [Message(role="user", content="q")])
+    assert "max_tokens" not in rec["kwargs"]
 
 
 async def test_complete_unknown_role_raises():
