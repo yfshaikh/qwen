@@ -127,3 +127,105 @@ async def test_get_all_nodes_includes_forgotten(database_url):
         assert {n.label for n in allnodes} == {"Live", "Dead"}
     finally:
         await storage.close()
+
+
+async def test_last_event_at_matches_old_max_ts_derivation(database_url):
+    storage = PostgresStorage(database_url)
+    await storage.connect()
+    try:
+        learner = f"t-{uuid.uuid4()}"
+        assert await storage.last_event_at(learner) is None  # no events yet
+
+        await storage.insert_events([
+            LearningEvent(learner_id=learner, type="utterance", text="first"),
+            LearningEvent(learner_id=learner, type="utterance", text="second"),
+        ])
+        # old derivation: max(ts) over the learner's events, computed in Python
+        events = await storage.get_events(learner, limit=200)
+        expected = max(e.ts for e in events)
+        assert await storage.last_event_at(learner) == expected
+    finally:
+        await storage.close()
+
+
+async def test_count_voice_sessions_matches_old_len_derivation(database_url):
+    storage = PostgresStorage(database_url)
+    await storage.connect()
+    try:
+        learner = f"t-{uuid.uuid4()}"
+        assert await storage.count_voice_sessions(learner) == 0
+
+        await storage.create_voice_session(learner)
+        await storage.create_voice_session(learner)
+        await storage.create_voice_session(learner)
+
+        # old derivation: len(await list_voice_sessions(learner_id, 1000))
+        expected = len(await storage.list_voice_sessions(learner, 1000))
+        assert expected == 3
+        assert await storage.count_voice_sessions(learner) == expected
+    finally:
+        await storage.close()
+
+
+async def test_get_live_nodes_with_embedding_false_strips_embedding(database_url):
+    storage = PostgresStorage(database_url)
+    await storage.connect()
+    try:
+        learner = f"t-{uuid.uuid4()}"
+        await storage.insert_node(
+            Node(learner_id=learner, type=NodeType.CONCEPT, label="A",
+                 embedding=_vec(1, 0))
+        )
+        lite = await storage.get_live_nodes(learner, with_embedding=False)
+        assert lite[0].embedding is None
+        assert lite[0].label == "A"
+
+        full = await storage.get_live_nodes(learner, with_embedding=True)
+        assert full[0].embedding is not None and len(full[0].embedding) == 1024
+
+        # default matches the old (embedding-carrying) behavior
+        default = await storage.get_live_nodes(learner)
+        assert default[0].embedding is not None
+    finally:
+        await storage.close()
+
+
+async def test_get_all_nodes_with_embedding_false_strips_embedding(database_url):
+    storage = PostgresStorage(database_url)
+    await storage.connect()
+    try:
+        learner = f"t-{uuid.uuid4()}"
+        await storage.insert_node(
+            Node(learner_id=learner, type=NodeType.CONCEPT, label="A",
+                 embedding=_vec(1, 0))
+        )
+        lite = await storage.get_all_nodes(learner, with_embedding=False)
+        assert lite[0].embedding is None
+
+        default = await storage.get_all_nodes(learner)
+        assert default[0].embedding is not None
+    finally:
+        await storage.close()
+
+
+async def test_top_evidence_with_embedding_false_strips_embedding(database_url):
+    storage = PostgresStorage(database_url)
+    await storage.connect()
+    try:
+        learner = f"t-{uuid.uuid4()}"
+        a = await storage.insert_node(
+            Node(learner_id=learner, type=NodeType.CONCEPT, label="A",
+                 embedding=_vec(1, 0))
+        )
+        await storage.insert_evidence(
+            Evidence(node_id=a, kind=EvidenceKind.QUIZ_CORRECT, content="ok",
+                     importance=0.8, embedding=_vec(1, 0))
+        )
+        lite = await storage.top_evidence([a], per_node=2, with_embedding=False)
+        assert lite[a][0].content == "ok"
+        assert lite[a][0].embedding is None
+
+        default = await storage.top_evidence([a], per_node=2)
+        assert default[a][0].embedding is not None
+    finally:
+        await storage.close()

@@ -1,4 +1,4 @@
-from engram.core.ports import EmbedderPort, HostPort, LLMPort, StoragePort
+from engram.core.ports import EmbedderPort, LLMPort, StoragePort
 from tests.fakes import FakeEmbedder, FakeLLM, FakeStorage
 
 
@@ -7,12 +7,6 @@ def test_fakes_satisfy_ports():
     assert isinstance(FakeLLM(), LLMPort)
     assert isinstance(FakeEmbedder(), EmbedderPort)
     assert isinstance(FakeStorage(), StoragePort)
-
-
-def test_host_port_methods_exist():
-    # HostPort is the facade contract; assert its method names are declared.
-    for name in ("ingest", "recall", "consolidate", "graph"):
-        assert hasattr(HostPort, name)
 
 
 async def test_fake_llm_records_calls():
@@ -162,6 +156,85 @@ async def test_fake_get_audit_orders_filters_and_scopes():
 
     assert len(await fs.get_audit("a", limit=1)) == 1
     assert await fs.get_audit("nobody") == []
+
+
+async def test_fake_last_event_at_matches_old_max_ts_derivation():
+    from datetime import datetime, timedelta, timezone
+
+    from engram.core.models import LearningEvent
+
+    fs = FakeStorage()
+    assert await fs.last_event_at("a") is None  # no events yet
+
+    t0 = datetime(2026, 1, 1, tzinfo=timezone.utc)
+    await fs.insert_events([
+        LearningEvent(learner_id="a", type="utterance", text="first", ts=t0),
+        LearningEvent(learner_id="a", type="utterance", text="second", ts=t0 + timedelta(days=1)),
+        LearningEvent(learner_id="other", type="utterance", text="x", ts=t0 + timedelta(days=5)),
+    ])
+    # old derivation: max(ts) over the learner's own events
+    expected = max(e.ts for e in fs.events if e.learner_id == "a")
+    assert await fs.last_event_at("a") == expected == t0 + timedelta(days=1)
+
+
+async def test_fake_count_voice_sessions_matches_old_len_derivation():
+    fs = FakeStorage()
+    assert await fs.count_voice_sessions("a") == 0
+
+    await fs.create_voice_session("a")
+    await fs.create_voice_session("a")
+    await fs.create_voice_session("other")
+
+    # old derivation: len(await list_voice_sessions(learner_id, 1000))
+    expected = len(await fs.list_voice_sessions("a", 1000))
+    assert expected == 2
+    assert await fs.count_voice_sessions("a") == expected
+
+
+async def test_fake_get_live_nodes_with_embedding_false_strips_embedding():
+    from engram.core.models import Node, NodeType
+
+    fs = FakeStorage()
+    nid = await fs.insert_node(
+        Node(learner_id="a", type=NodeType.CONCEPT, label="A", embedding=[1.0, 0.0])
+    )
+    lite = await fs.get_live_nodes("a", with_embedding=False)
+    assert lite[0].embedding is None and lite[0].label == "A"
+
+    default = await fs.get_live_nodes("a")
+    assert default[0].embedding == [1.0, 0.0]
+    # the stored node itself must be untouched by the lite copy
+    assert fs.nodes[nid].embedding == [1.0, 0.0]
+
+
+async def test_fake_get_all_nodes_with_embedding_false_strips_embedding():
+    from engram.core.models import Node, NodeType
+
+    fs = FakeStorage()
+    await fs.insert_node(
+        Node(learner_id="a", type=NodeType.CONCEPT, label="A", embedding=[1.0, 0.0])
+    )
+    lite = await fs.get_all_nodes("a", with_embedding=False)
+    assert lite[0].embedding is None
+
+    default = await fs.get_all_nodes("a")
+    assert default[0].embedding == [1.0, 0.0]
+
+
+async def test_fake_top_evidence_with_embedding_false_strips_embedding():
+    from engram.core.models import Evidence, EvidenceKind
+
+    fs = FakeStorage()
+    await fs.insert_evidence(
+        Evidence(node_id="a", kind=EvidenceKind.QUIZ_CORRECT, content="ok",
+                 importance=0.9, embedding=[1.0, 0.0])
+    )
+    lite = await fs.top_evidence(["a"], per_node=2, with_embedding=False)
+    assert lite["a"][0].content == "ok"
+    assert lite["a"][0].embedding is None
+
+    default = await fs.top_evidence(["a"], per_node=2)
+    assert default["a"][0].embedding == [1.0, 0.0]
 
 
 async def test_fake_llm_stream_yields_canned_text_in_chunks():

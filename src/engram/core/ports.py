@@ -16,11 +16,9 @@ from engram.core.models import (
     Completion,
     Edge,
     Evidence,
-    GraphView,
     LearningEvent,
     Message,
     Node,
-    RecallResult,
 )
 
 
@@ -60,7 +58,7 @@ class StoragePort(Protocol):
     async def get_edges(self, learner_id: str, node_ids: list[str]) -> list[Edge]: ...
     async def get_nodes(self, learner_id: str, node_ids: list[str]) -> list[Node]: ...
     async def top_evidence(
-        self, node_ids: list[str], per_node: int
+        self, node_ids: list[str], per_node: int, *, with_embedding: bool = True
     ) -> dict[str, list[Evidence]]: ...
     async def get_events(
         self, learner_id: str, limit: int = 200
@@ -70,7 +68,9 @@ class StoragePort(Protocol):
     async def get_pending_events(
         self, learner_id: str, *, limit: int | None = None
     ) -> list[LearningEvent]: ...
-    async def get_live_nodes(self, learner_id: str) -> list[Node]: ...
+    async def get_live_nodes(
+        self, learner_id: str, *, with_embedding: bool = True
+    ) -> list[Node]: ...
     def consolidation_lock(
         self, learner_id: str
     ) -> AbstractAsyncContextManager[bool]: ...
@@ -91,20 +91,3 @@ class StoragePort(Protocol):
     async def get_audit(
         self, learner_id: str, since: Any = None, limit: int = 100
     ) -> list[dict]: ...
-
-
-@runtime_checkable
-class HostPort(Protocol):
-    """The core's outward API surface (consumed by host adapters).
-
-    Sketched in Phase 0; bodies land in Phases 1–2.
-    """
-
-    async def ingest(self, events: list[LearningEvent]) -> None: ...
-    async def recall(
-        self, learner_id: str, query: str, budget: int
-    ) -> RecallResult: ...
-    async def consolidate(self, learner_id: str) -> None: ...
-    async def graph(
-        self, learner_id: str, focus: str | None = None
-    ) -> GraphView: ...

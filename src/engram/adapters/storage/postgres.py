@@ -1,4 +1,9 @@
-"""asyncpg-backed StoragePort with pgvector. Phase 1: full ingest + recall reads.
+"""asyncpg-backed StoragePort with pgvector.
+
+Implements the full storage surface: event/node/edge/evidence ingest, vector
+recall reads, consolidation (locking, plan application, merge), audit and
+voice-session persistence, and the insight queries (mastery history, evidence
+and event counts).
 
 Each pooled connection registers the pgvector codec (so embeddings pass as lists)
 and a jsonb codec (so refs/signals/source_refs round-trip as Python objects).
@@ -28,6 +33,30 @@ _NODE_COLS = (
     "id, learner_id, type, label, summary, mastery, confidence, salience, "
     "importance, embedding, source_refs, forgotten_at, created_at, last_seen_at"
 )
+# Embedding-free projection for read paths that never touch node.embedding
+# (insights, graph.build_graph) — cuts a ~1024-float column off the wire.
+_NODE_COLS_LITE = (
+    "id, learner_id, type, label, summary, mastery, confidence, salience, "
+    "importance, source_refs, forgotten_at, created_at, last_seen_at"
+)
+
+# merge_nodes collision predicate: a = the weaker edge of a keep-X / drop-X
+# collision pair; shared by the audit SELECT and the DELETE so they can never
+# disagree. The rank CASE must stay in sync with engram.core.edges.EDGE_RANK
+# (unified later in B3 — kept as a local literal here on purpose for now).
+_MERGE_COLLISION_SQL = """
+    a.learner_id=$1 AND b.learner_id=$1 AND a.id <> b.id
+    AND (a.source_id IN ($2,$3) OR a.target_id IN ($2,$3))
+    AND (b.source_id IN ($2,$3) OR b.target_id IN ($2,$3))
+    AND (CASE WHEN a.source_id IN ($2,$3) THEN a.target_id
+              ELSE a.source_id END)
+      = (CASE WHEN b.source_id IN ($2,$3) THEN b.target_id
+              ELSE b.source_id END)
+    AND (CASE a.type WHEN 'prerequisite' THEN 2 WHEN 'part_of' THEN 1 ELSE 0 END,
+         a.weight, a.id)
+      < (CASE b.type WHEN 'prerequisite' THEN 2 WHEN 'part_of' THEN 1 ELSE 0 END,
+         b.weight, b.id)
+"""
 
 
 async def _init_conn(conn: asyncpg.Connection) -> None:
@@ -64,8 +93,8 @@ def _vec_to_list(emb: Any) -> list[float] | None:
     return [float(x) for x in emb]
 
 
-def _row_to_node(row: asyncpg.Record) -> Node:
-    emb = row["embedding"]
+def _row_to_node(row: asyncpg.Record, *, with_embedding: bool = True) -> Node:
+    emb = row["embedding"] if with_embedding else None
     return Node(
         id=str(row["id"]),
         learner_id=row["learner_id"],
@@ -91,11 +120,11 @@ class PostgresStorage:
 
     async def connect(self) -> None:
         self._pool = await asyncpg.create_pool(
-            self._dsn, min_size=1, max_size=4, init=_init_conn
+            self._dsn, min_size=1, max_size=10, init=_init_conn
         )
 
     @property
-    def _p(self) -> asyncpg.Pool:
+    def _require_pool(self) -> asyncpg.Pool:
         assert self._pool is not None, "PostgresStorage used before connect()"
         return self._pool
 
@@ -108,7 +137,7 @@ class PostgresStorage:
         if self._pool is None:
             return False
         try:
-            async with self._p.acquire() as conn:
+            async with self._require_pool.acquire() as conn:
                 if await conn.fetchval("SELECT 1") != 1:
                     return False
                 return bool(
@@ -122,11 +151,11 @@ class PostgresStorage:
     # --- writes ---------------------------------------------------------
 
     async def insert_event(self, e: LearningEvent) -> str:
-        async with self._p.acquire() as conn:
+        async with self._require_pool.acquire() as conn:
             return str(await self._insert_event(conn, e))
 
     async def insert_events(self, events: list[LearningEvent]) -> list[str]:
-        async with self._p.acquire() as conn:
+        async with self._require_pool.acquire() as conn:
             async with conn.transaction():
                 return [str(await self._insert_event(conn, e)) for e in events]
 
@@ -143,7 +172,7 @@ class PostgresStorage:
         )
 
     async def insert_node(self, n: Node) -> str:
-        async with self._p.acquire() as conn:
+        async with self._require_pool.acquire() as conn:
             nid = await conn.fetchval(
                 """
                 INSERT INTO engram_nodes
@@ -158,7 +187,7 @@ class PostgresStorage:
             return str(nid)
 
     async def insert_edge(self, e: Edge) -> str:
-        async with self._p.acquire() as conn:
+        async with self._require_pool.acquire() as conn:
             eid = await conn.fetchval(
                 """
                 INSERT INTO engram_edges
@@ -171,7 +200,7 @@ class PostgresStorage:
             return str(eid)
 
     async def insert_evidence(self, ev: Evidence) -> str:
-        async with self._p.acquire() as conn:
+        async with self._require_pool.acquire() as conn:
             evid = await conn.fetchval(
                 """
                 INSERT INTO engram_evidence
@@ -185,7 +214,7 @@ class PostgresStorage:
             return str(evid)
 
     async def delete_learner(self, learner_id: str) -> None:
-        async with self._p.acquire() as conn:
+        async with self._require_pool.acquire() as conn:
             async with conn.transaction():
                 # nodes cascade to edges/evidence/mastery_history (FK ON DELETE CASCADE)
                 await conn.execute("DELETE FROM engram_nodes WHERE learner_id = $1", learner_id)
@@ -200,7 +229,7 @@ class PostgresStorage:
     async def vector_search(
         self, learner_id: str, query_vec: list[float], k: int
     ) -> list[Node]:
-        async with self._p.acquire() as conn:
+        async with self._require_pool.acquire() as conn:
             rows = await conn.fetch(
                 f"""
                 SELECT {_NODE_COLS} FROM engram_nodes
@@ -213,7 +242,7 @@ class PostgresStorage:
             return [_row_to_node(r) for r in rows]
 
     async def get_edges(self, learner_id: str, node_ids: list[str]) -> list[Edge]:
-        async with self._p.acquire() as conn:
+        async with self._require_pool.acquire() as conn:
             rows = await conn.fetch(
                 """
                 SELECT id, learner_id, source_id, target_id, type, weight, created_at
@@ -237,7 +266,7 @@ class PostgresStorage:
             ]
 
     async def get_nodes(self, learner_id: str, node_ids: list[str]) -> list[Node]:
-        async with self._p.acquire() as conn:
+        async with self._require_pool.acquire() as conn:
             rows = await conn.fetch(
                 f"""
                 SELECT {_NODE_COLS} FROM engram_nodes
@@ -248,15 +277,17 @@ class PostgresStorage:
             return [_row_to_node(r) for r in rows]
 
     async def top_evidence(
-        self, node_ids: list[str], per_node: int
+        self, node_ids: list[str], per_node: int, *, with_embedding: bool = True
     ) -> dict[str, list[Evidence]]:
-        async with self._p.acquire() as conn:
+        cols = ("id, node_id, kind, content, source_ref, embedding, importance, created_at"
+                if with_embedding else
+                "id, node_id, kind, content, source_ref, importance, created_at")
+        async with self._require_pool.acquire() as conn:
             rows = await conn.fetch(
-                """
-                SELECT id, node_id, kind, content, source_ref, embedding,
-                       importance, created_at
+                f"""
+                SELECT {cols}
                 FROM (
-                  SELECT *, row_number() OVER (
+                  SELECT {cols}, row_number() OVER (
                     PARTITION BY node_id
                     ORDER BY importance DESC NULLS LAST, created_at DESC
                   ) AS rn
@@ -269,7 +300,7 @@ class PostgresStorage:
             )
         out: dict[str, list[Evidence]] = {nid: [] for nid in node_ids}
         for r in rows:
-            emb = r["embedding"]
+            emb = r["embedding"] if with_embedding else None
             out.setdefault(str(r["node_id"]), []).append(
                 Evidence(
                     id=str(r["id"]),
@@ -289,7 +320,7 @@ class PostgresStorage:
     async def get_pending_events(
         self, learner_id: str, *, limit: int | None = None
     ) -> list[LearningEvent]:
-        async with self._p.acquire() as conn:
+        async with self._require_pool.acquire() as conn:
             if limit is None:
                 rows = await conn.fetch(
                     f"SELECT {_EVENT_COLS} FROM engram_events "
@@ -310,7 +341,7 @@ class PostgresStorage:
     async def get_events(
         self, learner_id: str, limit: int = 200
     ) -> list[LearningEvent]:
-        async with self._p.acquire() as conn:
+        async with self._require_pool.acquire() as conn:
             rows = await conn.fetch(
                 f"SELECT {_EVENT_COLS} FROM engram_events "
                 "WHERE learner_id = $1 ORDER BY ts DESC LIMIT $2",
@@ -319,26 +350,32 @@ class PostgresStorage:
             )
             return [_row_to_event(r) for r in reversed(rows)]
 
-    async def get_live_nodes(self, learner_id: str) -> list[Node]:
-        async with self._p.acquire() as conn:
+    async def get_live_nodes(
+        self, learner_id: str, *, with_embedding: bool = True
+    ) -> list[Node]:
+        cols = _NODE_COLS if with_embedding else _NODE_COLS_LITE
+        async with self._require_pool.acquire() as conn:
             rows = await conn.fetch(
-                f"SELECT {_NODE_COLS} FROM engram_nodes "
+                f"SELECT {cols} FROM engram_nodes "
                 "WHERE learner_id = $1 AND forgotten_at IS NULL",
                 learner_id,
             )
-            return [_row_to_node(r) for r in rows]
+            return [_row_to_node(r, with_embedding=with_embedding) for r in rows]
 
-    async def get_all_nodes(self, learner_id: str) -> list[Node]:
-        async with self._p.acquire() as conn:
+    async def get_all_nodes(
+        self, learner_id: str, *, with_embedding: bool = True
+    ) -> list[Node]:
+        cols = _NODE_COLS if with_embedding else _NODE_COLS_LITE
+        async with self._require_pool.acquire() as conn:
             rows = await conn.fetch(
-                f"SELECT {_NODE_COLS} FROM engram_nodes WHERE learner_id = $1",
+                f"SELECT {cols} FROM engram_nodes WHERE learner_id = $1",
                 learner_id,
             )
-            return [_row_to_node(r) for r in rows]
+            return [_row_to_node(r, with_embedding=with_embedding) for r in rows]
 
     @asynccontextmanager
     async def consolidation_lock(self, learner_id: str):
-        async with self._p.acquire() as conn:
+        async with self._require_pool.acquire() as conn:
             got = await conn.fetchval(
                 "SELECT pg_try_advisory_lock(hashtext($1))", learner_id
             )
@@ -351,75 +388,100 @@ class PostgresStorage:
                     )
 
     async def apply_consolidation(self, plan) -> None:
-        async with self._p.acquire() as conn:
+        async with self._require_pool.acquire() as conn:
             async with conn.transaction():
-                idmap: dict[str, str] = {}
-                for n in plan.new_nodes:
-                    real = await conn.fetchval(
-                        """
-                        INSERT INTO engram_nodes
-                          (learner_id, type, label, summary, mastery, confidence,
-                           salience, importance, embedding, source_refs, forgotten_at, last_seen_at)
-                        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)
-                        RETURNING id
-                        """,
-                        n.learner_id, n.type.value, n.label, n.summary, n.mastery,
-                        n.confidence, n.salience, n.importance, n.embedding, n.source_refs,
-                        n.forgotten_at, n.last_seen_at,
-                    )
-                    idmap[n.id] = str(real)
+                idmap = await self._insert_new_nodes(conn, plan.new_nodes)
 
-                def rid(x: str) -> str:
+                def resolve_id(x: str) -> str:
                     return idmap.get(x, x)
 
-                for e in plan.new_edges:
-                    await conn.execute(
-                        "INSERT INTO engram_edges (learner_id, source_id, target_id, type, weight)"
-                        " VALUES ($1,$2,$3,$4,$5)",
-                        e.learner_id, rid(e.source_id), rid(e.target_id), e.type.value, e.weight,
-                    )
-                for e in plan.edge_updates:
-                    await conn.execute(
-                        "UPDATE engram_edges SET type=$1, weight=$2,"
-                        " source_id=$3, target_id=$4 WHERE id=$5",
-                        e.type.value, e.weight, e.source_id, e.target_id, e.id,
-                    )
-                for ev in plan.new_evidence:
-                    await conn.execute(
-                        "INSERT INTO engram_evidence"
-                        " (node_id, kind, content, source_ref, embedding, importance)"
-                        " VALUES ($1,$2,$3,$4,$5,$6)",
-                        rid(ev.node_id), ev.kind.value, ev.content, ev.source_ref,
-                        ev.embedding, ev.importance,
-                    )
-                for n in plan.node_updates:
-                    await conn.execute(
-                        "UPDATE engram_nodes SET label=$1, mastery=$2, confidence=$3,"
-                        " salience=$4, importance=$5, last_seen_at=$6, forgotten_at=$7"
-                        " WHERE id=$8",
-                        n.label, n.mastery, n.confidence, n.salience, n.importance,
-                        n.last_seen_at, n.forgotten_at, n.id,
-                    )
-                for mp in plan.mastery_history:
-                    await conn.execute(
-                        "INSERT INTO engram_mastery_history (node_id, mastery, confidence)"
-                        " VALUES ($1,$2,$3)",
-                        rid(mp.node_id), mp.mastery, mp.confidence,
-                    )
-                for a in plan.audit:
-                    await conn.execute(
-                        "INSERT INTO engram_audit"
-                        " (learner_id, op, input_refs, output_refs, rationale, model, tokens, cost)"
-                        " VALUES ($1,$2,$3,$4,$5,$6,$7,$8)",
-                        plan.learner_id, a.op, a.input_refs, a.output_refs,
-                        a.rationale, a.model, a.tokens, a.cost,
-                    )
-                if plan.processed_event_ids:
-                    await conn.execute(
-                        "UPDATE engram_events SET consolidated_at = now()"
-                        " WHERE id = ANY($1::uuid[])",
-                        plan.processed_event_ids,
-                    )
+                await self._apply_edge_updates(conn, plan.new_edges, plan.edge_updates, resolve_id)
+                await self._insert_new_evidence(conn, plan.new_evidence, resolve_id)
+                await self._apply_node_updates(conn, plan.node_updates)
+                await self._append_mastery_history(conn, plan.mastery_history, resolve_id)
+                await self._write_audit(conn, plan.learner_id, plan.audit)
+                await self._stamp_events(conn, plan.processed_event_ids)
+
+    async def _insert_new_nodes(self, conn: asyncpg.Connection, new_nodes) -> dict[str, str]:
+        """Insert brand-new nodes and return {temp_id: real_id} for resolve_id."""
+        idmap: dict[str, str] = {}
+        for n in new_nodes:
+            real = await conn.fetchval(
+                """
+                INSERT INTO engram_nodes
+                  (learner_id, type, label, summary, mastery, confidence,
+                   salience, importance, embedding, source_refs, forgotten_at, last_seen_at)
+                VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)
+                RETURNING id
+                """,
+                n.learner_id, n.type.value, n.label, n.summary, n.mastery,
+                n.confidence, n.salience, n.importance, n.embedding, n.source_refs,
+                n.forgotten_at, n.last_seen_at,
+            )
+            idmap[n.id] = str(real)
+        return idmap
+
+    async def _apply_edge_updates(self, conn: asyncpg.Connection, new_edges, edge_updates,
+                                  resolve_id) -> None:
+        for e in new_edges:
+            await conn.execute(
+                "INSERT INTO engram_edges (learner_id, source_id, target_id, type, weight)"
+                " VALUES ($1,$2,$3,$4,$5)",
+                e.learner_id, resolve_id(e.source_id), resolve_id(e.target_id), e.type.value, e.weight,
+            )
+        for e in edge_updates:
+            await conn.execute(
+                "UPDATE engram_edges SET type=$1, weight=$2,"
+                " source_id=$3, target_id=$4 WHERE id=$5",
+                e.type.value, e.weight, e.source_id, e.target_id, e.id,
+            )
+
+    async def _insert_new_evidence(self, conn: asyncpg.Connection, new_evidence, resolve_id) -> None:
+        for ev in new_evidence:
+            await conn.execute(
+                "INSERT INTO engram_evidence"
+                " (node_id, kind, content, source_ref, embedding, importance)"
+                " VALUES ($1,$2,$3,$4,$5,$6)",
+                resolve_id(ev.node_id), ev.kind.value, ev.content, ev.source_ref,
+                ev.embedding, ev.importance,
+            )
+
+    async def _apply_node_updates(self, conn: asyncpg.Connection, node_updates) -> None:
+        for n in node_updates:
+            await conn.execute(
+                "UPDATE engram_nodes SET label=$1, mastery=$2, confidence=$3,"
+                " salience=$4, importance=$5, last_seen_at=$6, forgotten_at=$7"
+                " WHERE id=$8",
+                n.label, n.mastery, n.confidence, n.salience, n.importance,
+                n.last_seen_at, n.forgotten_at, n.id,
+            )
+
+    async def _append_mastery_history(self, conn: asyncpg.Connection, mastery_history,
+                                      resolve_id) -> None:
+        for mp in mastery_history:
+            await conn.execute(
+                "INSERT INTO engram_mastery_history (node_id, mastery, confidence)"
+                " VALUES ($1,$2,$3)",
+                resolve_id(mp.node_id), mp.mastery, mp.confidence,
+            )
+
+    async def _write_audit(self, conn: asyncpg.Connection, learner_id: str, audit) -> None:
+        for a in audit:
+            await conn.execute(
+                "INSERT INTO engram_audit"
+                " (learner_id, op, input_refs, output_refs, rationale, model, tokens, cost)"
+                " VALUES ($1,$2,$3,$4,$5,$6,$7,$8)",
+                learner_id, a.op, a.input_refs, a.output_refs,
+                a.rationale, a.model, a.tokens, a.cost,
+            )
+
+    async def _stamp_events(self, conn: asyncpg.Connection, processed_event_ids) -> None:
+        if processed_event_ids:
+            await conn.execute(
+                "UPDATE engram_events SET consolidated_at = now()"
+                " WHERE id = ANY($1::uuid[])",
+                processed_event_ids,
+            )
 
     async def merge_nodes(self, learner_id: str, keep_id: str, drop_id: str, *,
                           label, mastery, confidence, salience, importance,
@@ -433,22 +495,7 @@ class PostgresStorage:
         matches FakeStorage: higher (edge_rank, weight, id) wins. The rank CASE
         must stay in sync with engram.core.edges.EDGE_RANK.
         """
-        # a = the weaker edge of a keep-X / drop-X collision pair; shared by the
-        # audit SELECT and the DELETE so they can never disagree.
-        collision = """
-            a.learner_id=$1 AND b.learner_id=$1 AND a.id <> b.id
-            AND (a.source_id IN ($2,$3) OR a.target_id IN ($2,$3))
-            AND (b.source_id IN ($2,$3) OR b.target_id IN ($2,$3))
-            AND (CASE WHEN a.source_id IN ($2,$3) THEN a.target_id
-                      ELSE a.source_id END)
-              = (CASE WHEN b.source_id IN ($2,$3) THEN b.target_id
-                      ELSE b.source_id END)
-            AND (CASE a.type WHEN 'prerequisite' THEN 2 WHEN 'part_of' THEN 1 ELSE 0 END,
-                 a.weight, a.id)
-              < (CASE b.type WHEN 'prerequisite' THEN 2 WHEN 'part_of' THEN 1 ELSE 0 END,
-                 b.weight, b.id)
-        """
-        async with self._p.acquire() as conn:
+        async with self._require_pool.acquire() as conn:
             async with conn.transaction():
                 await conn.execute(
                     "UPDATE engram_evidence SET node_id=$1 WHERE node_id=$2",
@@ -465,11 +512,11 @@ class PostgresStorage:
                 # 2. keep-X vs drop-X collisions: capture, then delete the weaker
                 dropped = await conn.fetch(
                     f"SELECT a.type, a.weight FROM engram_edges a, engram_edges b"
-                    f" WHERE {collision}",
+                    f" WHERE {_MERGE_COLLISION_SQL}",
                     learner_id, keep_id, drop_id)
                 await conn.execute(
                     f"DELETE FROM engram_edges a USING engram_edges b"
-                    f" WHERE {collision}",
+                    f" WHERE {_MERGE_COLLISION_SQL}",
                     learner_id, keep_id, drop_id)
                 # 3. repoint what remains (collision-free by construction)
                 await conn.execute(
@@ -495,7 +542,7 @@ class PostgresStorage:
                     learner_id, audit)
 
     async def get_audit(self, learner_id: str, since=None, limit: int = 100) -> list[dict]:
-        async with self._p.acquire() as conn:
+        async with self._require_pool.acquire() as conn:
             rows = await conn.fetch(
                 "SELECT id, op, rationale, model, tokens, cost, ts FROM engram_audit "
                 "WHERE learner_id = $1 AND ($2::timestamptz IS NULL OR ts > $2) "
@@ -518,7 +565,7 @@ class PostgresStorage:
     # --- voice sessions (host-layer) ------------------------------------
 
     async def create_voice_session(self, learner_id: str) -> str:
-        async with self._p.acquire() as conn:
+        async with self._require_pool.acquire() as conn:
             sid = await conn.fetchval(
                 "INSERT INTO engram_voice_sessions (learner_id) VALUES ($1) RETURNING id",
                 learner_id,
@@ -526,14 +573,14 @@ class PostgresStorage:
             return str(sid)
 
     async def end_voice_session(self, session_id: str) -> None:
-        async with self._p.acquire() as conn:
+        async with self._require_pool.acquire() as conn:
             await conn.execute(
                 "UPDATE engram_voice_sessions SET ended_at = now() WHERE id = $1",
                 session_id,
             )
 
     async def append_voice_turn(self, session_id, learner_id, role, text) -> str:
-        async with self._p.acquire() as conn:
+        async with self._require_pool.acquire() as conn:
             tid = await conn.fetchval(
                 "INSERT INTO engram_voice_turns (session_id, learner_id, role, text)"
                 " VALUES ($1,$2,$3,$4) RETURNING id",
@@ -542,7 +589,7 @@ class PostgresStorage:
             return str(tid)
 
     async def list_voice_sessions(self, learner_id: str, limit: int = 50) -> list[dict]:
-        async with self._p.acquire() as conn:
+        async with self._require_pool.acquire() as conn:
             rows = await conn.fetch(
                 """
                 SELECT s.id, s.started_at, s.ended_at,
@@ -560,7 +607,7 @@ class PostgresStorage:
                      "ended_at": r["ended_at"], "turns": r["turns"]} for r in rows]
 
     async def list_voice_turns(self, session_id: str) -> list[dict]:
-        async with self._p.acquire() as conn:
+        async with self._require_pool.acquire() as conn:
             rows = await conn.fetch(
                 "SELECT id, role, text, ts FROM engram_voice_turns"
                 " WHERE session_id = $1 ORDER BY ts",
@@ -586,21 +633,35 @@ class PostgresStorage:
             params.append(since)
             q += f" AND h.ts >= ${len(params)}"
         q += " ORDER BY h.ts"
-        async with self._p.acquire() as conn:
+        async with self._require_pool.acquire() as conn:
             rows = await conn.fetch(q, *params)
         return [{"node_id": str(r["node_id"]), "mastery": r["mastery"],
                  "confidence": r["confidence"], "ts": r["ts"]} for r in rows]
 
     async def evidence_counts_by_kind(self, learner_id: str) -> list[dict]:
-        async with self._p.acquire() as conn:
+        async with self._require_pool.acquire() as conn:
             rows = await conn.fetch(
                 "SELECT e.node_id, e.kind, count(*) AS c FROM engram_evidence e"
                 " JOIN engram_nodes n ON n.id = e.node_id WHERE n.learner_id = $1"
                 " GROUP BY e.node_id, e.kind", learner_id)
         return [{"node_id": str(r["node_id"]), "kind": r["kind"], "count": r["c"]} for r in rows]
 
+    async def last_event_at(self, learner_id: str) -> datetime | None:
+        async with self._require_pool.acquire() as conn:
+            return await conn.fetchval(
+                "SELECT max(ts) FROM engram_events WHERE learner_id = $1", learner_id
+            )
+
+    async def count_voice_sessions(self, learner_id: str) -> int:
+        async with self._require_pool.acquire() as conn:
+            count = await conn.fetchval(
+                "SELECT count(*) FROM engram_voice_sessions WHERE learner_id = $1",
+                learner_id,
+            )
+            return int(count)
+
     async def event_counts_by_day(self, learner_id: str, days: int = 30) -> list[dict]:
-        async with self._p.acquire() as conn:
+        async with self._require_pool.acquire() as conn:
             rows = await conn.fetch(
                 # bucket in UTC explicitly so day boundaries match FakeStorage
                 # (which uses .date() on tz-aware UTC datetimes) regardless of the

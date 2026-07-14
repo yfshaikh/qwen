@@ -178,3 +178,27 @@ class RecallResult:
 class GraphView:
     nodes: list[GraphNode]
     edges: list[GraphEdge]
+
+
+# --- shared field-projection helpers (kill the recall.py/graph.py copy-paste) -
+
+
+def evidence_ref(e: Evidence) -> EvidenceRef:
+    return {"kind": e.kind.value, "content": e.content, "importance": e.importance}
+
+
+def node_common_fields(n: Node) -> dict[str, Any]:
+    """Fields shared by ScoredNode (recall.py) and GraphNode (graph.py).
+
+    Each caller layers its own extra keys (score/scores for recall,
+    summary for graph) on top of this dict.
+    """
+    return {
+        "id": n.id,
+        "label": n.label,
+        "type": n.type.value,
+        "mastery": n.mastery,
+        "confidence": n.confidence,
+        "salience": n.salience,
+        "importance": n.importance,
+    }

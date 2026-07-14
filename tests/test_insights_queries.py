@@ -10,7 +10,7 @@ from engram.core.models import (
     Node,
     NodeType,
 )
-from engram.insights import queries
+from engram.insights import Insights, queries
 from tests.fakes import FakeEmbedder, FakeLLM, FakeStorage
 
 
@@ -93,7 +93,7 @@ def test_trend_improving_vs_stuck():
 async def test_insights_summary_end_to_end():
     s = FakeStorage()
     _node(s, "a", mastery=0.4, salience=0.5)
-    out = await _eng(s).insights.summary("L")
+    out = await Insights(_eng(s).storage).summary("L")
     assert out["concepts"] == 1 and out["avg_mastery"] == 0.4
 
 
@@ -103,7 +103,7 @@ async def test_insights_review_queue_end_to_end():
     _node(s, "derivatives", mastery=0.2)
     s.edges = [Edge(learner_id="L", source_id="limits", target_id="derivatives",
                     type=EdgeType.PREREQUISITE)]
-    q = await _eng(s).insights.review_queue("L", k=5)
+    q = await Insights(_eng(s).storage).review_queue("L", k=5)
     assert q[0]["node_id"] == "limits"
 
 

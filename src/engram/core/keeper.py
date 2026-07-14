@@ -39,6 +39,14 @@ def _utcnow() -> datetime:
     return datetime.now(timezone.utc)
 
 
+def _labels_match(a: str, b: str) -> bool:
+    """Merge-by-label predicate: normalized labels equal (and non-empty), or
+    lexically close enough by token-Jaccard. Shared by _resolve and
+    _find_dup_pair."""
+    norm_a = normalize_label(a)
+    return (bool(norm_a) and norm_a == normalize_label(b)) or token_jaccard(a, b) >= _JACCARD_MERGE
+
+
 @dataclass(slots=True)
 class KeeperParams:
     tau_high: float = 0.86
@@ -61,7 +69,7 @@ class Keeper:
         self.storage = storage
         self.llm = llm
         self.embedder = embedder
-        self.p = params
+        self.params = params
         self.clock = clock or _utcnow
 
     async def consolidate(self, learner_id: str) -> ConsolidationReport:
@@ -100,7 +108,7 @@ class Keeper:
         for label in dropped:
             plan.audit.append(AuditEntry(
                 op="link", rationale=f"dropped {label!r}: tutor-only provenance"))
-        work: dict[str, _Work] = {n.id: _Work(node=n) for n in live if n.id}
+        working_nodes: dict[str, _Work] = {n.id: _Work(node=n) for n in live if n.id}
 
         cand_vecs = (
             await self.embedder.embed([c.embed_text() for c in extraction.nodes])
@@ -111,7 +119,7 @@ class Keeper:
         new_counter = 0
 
         for cand, vec in zip(extraction.nodes, cand_vecs):
-            target_id = await self._resolve(cand, vec, work, plan)
+            target_id = await self._resolve(cand, vec, working_nodes, plan)
             if target_id is None:  # create new
                 target_id = f"tmp-{new_counter}"
                 new_counter += 1
@@ -128,14 +136,29 @@ class Keeper:
                     embedding=list(vec),
                     last_seen_at=now,
                 )
-                work[target_id] = _Work(node=node)
+                working_nodes[target_id] = _Work(node=node)
                 plan.new_nodes.append(node)
                 plan.audit.append(AuditEntry(op="link", rationale=f"new node {cand.label}"))
             label_to_id[cand.label] = target_id
-            self._apply_evidence(cand, target_id, work, plan)
-            work[target_id].touched = True
+            self._apply_evidence(cand, target_id, working_nodes, plan)
+            working_nodes[target_id].touched = True
 
-        real_ids = [nid for nid in work if not nid.startswith("tmp-")]
+        await self._reconcile_edges(learner_id, working_nodes, label_to_id, extraction.relations, plan)
+
+        self._decay_and_snapshot(working_nodes, now, plan)
+        plan.audit.append(
+            AuditEntry(op="consolidate", rationale=f"{len(extraction.nodes)} candidates")
+        )
+        return plan
+
+    async def _reconcile_edges(self, learner_id: str, working_nodes: dict[str, _Work],
+                                label_to_id: dict[str, str], relations, plan: ConsolidationPlan) -> None:
+        """Reconcile extracted relations against the existing graph: bump/upgrade
+        edges that already exist, dedupe proposals within this batch, and queue
+        brand-new edges. Mutates plan.new_edges (append, in relation order),
+        plan.audit (append, upgrade entries), and plan.edge_updates (extended
+        once at the end from the accumulated pending_updates)."""
+        real_ids = [nid for nid in working_nodes if not nid.startswith("tmp-")]
         existing_edges = await self.storage.get_edges(learner_id, real_ids) if real_ids else []
         # Working copies — never mutate storage-owned Edge objects in place.
         by_pair: dict[frozenset, Edge] = {}
@@ -144,7 +167,7 @@ class Keeper:
         pending_updates: dict[str, Edge] = {}
         bumped: set[str] = set()
         proposed: dict[frozenset, Edge] = {}
-        for rel in extraction.relations:
+        for rel in relations:
             s = label_to_id.get(rel.source_label)
             t = label_to_id.get(rel.target_label)
             if not s or not t or s == t:
@@ -182,12 +205,6 @@ class Keeper:
             plan.new_edges.append(edge)
         plan.edge_updates.extend(pending_updates.values())
 
-        self._decay_and_snapshot(work, now, plan)
-        plan.audit.append(
-            AuditEntry(op="consolidate", rationale=f"{len(extraction.nodes)} candidates")
-        )
-        return plan
-
     async def _extract(self, events) -> Extraction:
         msgs = build_extraction_messages(events)
         try:
@@ -200,7 +217,7 @@ class Keeper:
             out = await self.llm.complete("extractor", repair, schema=EXTRACTION_SCHEMA)
             return parse_extraction(out.text or "")  # may raise -> consolidate aborts
 
-    async def _resolve(self, cand, vec, work, plan) -> str | None:
+    async def _resolve(self, cand, vec, working_nodes, plan) -> str | None:
         """Return an existing node id to attach to, or None to create new.
 
         Merge when normalized labels are equal or token-Jaccard >= 0.8 (lexical —
@@ -211,18 +228,17 @@ class Keeper:
         cand_type = NodeType(cand.type)
         cand_norm = normalize_label(cand.label)
         if cand_norm:
-            for nid, w in work.items():
+            for nid, w in working_nodes.items():
                 if w.node.type != cand_type:
                     continue
-                if cand_norm == normalize_label(w.node.label) or \
-                        token_jaccard(cand.label, w.node.label) >= _JACCARD_MERGE:
+                if _labels_match(cand.label, w.node.label):
                     plan.audit.append(AuditEntry(
                         op="merge",
                         rationale=f"merged {cand.label!r} into {w.node.label!r} (label match)"))
                     self._adopt_label(w, cand)
                     return nid
         best_id, best_sim = None, -1.0
-        for nid, w in work.items():
+        for nid, w in working_nodes.items():
             if nid.startswith("tmp-") or not w.node.embedding:
                 continue
             if w.node.type != cand_type:
@@ -230,13 +246,13 @@ class Keeper:
             sim = cosine_similarity(vec, w.node.embedding)
             if sim > best_sim:
                 best_sim, best_id = sim, nid
-        if best_id is not None and best_sim >= self.p.tau_high:
-            self._adopt_label(work[best_id], cand)
+        if best_id is not None and best_sim >= self.params.tau_high:
+            self._adopt_label(working_nodes[best_id], cand)
             return best_id
-        if best_id is not None and best_sim > self.p.tau_low:
-            if await self._reflector_confirm(cand, work[best_id].node):
+        if best_id is not None and best_sim > self.params.tau_low:
+            if await self._reflector_confirm(cand, working_nodes[best_id].node):
                 plan.audit.append(AuditEntry(op="merge", rationale=f"merged {cand.label}"))
-                self._adopt_label(work[best_id], cand)
+                self._adopt_label(working_nodes[best_id], cand)
                 return best_id
         return None
 
@@ -266,8 +282,8 @@ class Keeper:
         except Exception:
             return False  # degrade: not-same -> create new
 
-    def _apply_evidence(self, cand, target_id, work, plan) -> None:
-        node = work[target_id].node
+    def _apply_evidence(self, cand, target_id, working_nodes, plan) -> None:
+        node = working_nodes[target_id].node
         for ev in cand.evidence:
             plan.new_evidence.append(
                 Evidence(
@@ -278,12 +294,12 @@ class Keeper:
                 )
             )
             if ev.importance is not None:
-                node.importance = ewma(node.importance, ev.importance, self.p.ewma_alpha)
+                node.importance = ewma(node.importance, ev.importance, self.params.ewma_alpha)
             obs = observation_for(ev.kind, ev.correct, ev.mastery)
             if obs is None:
                 continue
             new_conf, conflicted = update_confidence(node.confidence, node.mastery, obs)
-            node.mastery = ewma(node.mastery, obs, self.p.ewma_alpha)
+            node.mastery = ewma(node.mastery, obs, self.params.ewma_alpha)
             node.confidence = new_conf
             if conflicted:
                 plan.audit.append(
@@ -293,11 +309,11 @@ class Keeper:
                     )
                 )
 
-    def _decay_and_snapshot(self, work, now, plan) -> None:
-        for nid, w in work.items():
+    def _decay_and_snapshot(self, working_nodes, now, plan) -> None:
+        for nid, w in working_nodes.items():
             node = w.node
             if w.touched:
-                node.salience = min(1.0, (node.salience or 0.0) + self.p.salience_bump)
+                node.salience = min(1.0, (node.salience or 0.0) + self.params.salience_bump)
                 node.last_seen_at = now
                 plan.mastery_history.append(
                     MasteryPoint(node_id=nid, mastery=node.mastery, confidence=node.confidence)
@@ -305,8 +321,8 @@ class Keeper:
             else:
                 last = node.last_seen_at or now
                 days = max(0.0, (now - last).total_seconds() / 86400)
-                node.salience = decay_salience(node.salience, days, self.p.decay)
-                if (node.salience or 0.0) < self.p.prune_floor:
+                node.salience = decay_salience(node.salience, days, self.params.decay)
+                if (node.salience or 0.0) < self.params.prune_floor:
                     node.forgotten_at = now
             if not nid.startswith("tmp-"):  # new nodes already carried in new_nodes
                 plan.node_updates.append(node)
@@ -364,13 +380,11 @@ class Keeper:
                 pair_key = frozenset((a.id, b.id))
                 if pair_key in rejected:
                     continue
-                lexical = (normalize_label(a.label)
-                           and normalize_label(a.label) == normalize_label(b.label)) \
-                    or token_jaccard(a.label, b.label) >= _JACCARD_MERGE
+                lexical = _labels_match(a.label, b.label)
                 cos = (cosine_similarity(a.embedding, b.embedding)
                        if a.embedding and b.embedding else 0.0)
-                same = lexical or cos >= self.p.tau_high
-                if not same and self.p.tau_low < cos < self.p.tau_high:
+                same = lexical or cos >= self.params.tau_high
+                if not same and self.params.tau_low < cos < self.params.tau_high:
                     same = await self._reflector_confirm(a, b)
                     if not same:
                         rejected.add(pair_key)

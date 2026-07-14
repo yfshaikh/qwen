@@ -1,7 +1,7 @@
 """The Engram facade — the public, mem0-style API surface.
 
-Phase 0 wires construction, env composition, lifecycle, and health. The four
-memory verbs (ingest/recall/consolidate/graph) are stubs that Phases 1–2 fill.
+Wires construction, env composition, lifecycle, and health, and implements
+the four memory verbs (ingest/recall/consolidate/graph).
 
 Usage:
     eng = Engram.from_env()
@@ -13,9 +13,12 @@ Usage:
 
 from __future__ import annotations
 
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from engram.core.models import AuditRow, GraphView, LearningEvent, RecallResult
+
+if TYPE_CHECKING:
+    from engram.core.keeper import Keeper
 
 
 class Engram:
@@ -106,7 +109,7 @@ class Engram:
             budget = budget if budget is not None else 800
         return await recall.run(learner_id, query, budget)
 
-    async def consolidate(self, learner_id: str):
+    def _make_keeper(self) -> Keeper:
         from engram.core.keeper import Keeper, KeeperParams
 
         s = self.settings
@@ -121,26 +124,15 @@ class Engram:
             )
         else:
             params = KeeperParams()
-        keeper = Keeper(self.storage, self.llm, self.embedder, params, clock=self._now)
+        return Keeper(self.storage, self.llm, self.embedder, params, clock=self._now)
+
+    async def consolidate(self, learner_id: str):
+        keeper = self._make_keeper()
         return await keeper.consolidate(learner_id)
 
     async def repair_merges(self, learner_id: str) -> dict:
         """Retroactively merge duplicate nodes in an existing graph (#6)."""
-        from engram.core.keeper import Keeper, KeeperParams
-
-        s = self.settings
-        if s is not None:
-            params = KeeperParams(
-                tau_high=s.keeper_tau_high,
-                tau_low=s.keeper_tau_low,
-                ewma_alpha=s.keeper_ewma_alpha,
-                salience_bump=s.keeper_salience_bump,
-                prune_floor=s.keeper_prune_floor,
-                decay=s.recall_decay,
-            )
-        else:
-            params = KeeperParams()
-        keeper = Keeper(self.storage, self.llm, self.embedder, params, clock=self._now)
+        keeper = self._make_keeper()
         return await keeper.repair_merges(learner_id)
 
     async def audit(self, learner_id: str, since: Any = None, limit: int = 100) -> list[AuditRow]:
@@ -161,12 +153,6 @@ class Engram:
         from engram.core.graph import build_graph
 
         return await build_graph(self.storage, learner_id, focus)
-
-    @property
-    def insights(self):
-        """Read-only analytics over this learner's graph (lazy; storage-only)."""
-        from engram.insights import Insights
-        return Insights(self.storage)
 
     # --- voice sessions (host-layer passthroughs) -----------------------
 

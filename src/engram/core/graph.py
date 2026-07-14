@@ -6,9 +6,18 @@ nodes carry their attributes plus top evidence. No LLM, no new storage methods.
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, cast
 
-from engram.core.models import Edge, Evidence, GraphEdge, GraphNode, GraphView, Node
+from engram.core.models import (
+    Edge,
+    Evidence,
+    GraphEdge,
+    GraphNode,
+    GraphView,
+    Node,
+    evidence_ref,
+    node_common_fields,
+)
 
 
 async def build_graph(
@@ -19,7 +28,9 @@ async def build_graph(
     per_node_evidence: int = 2,
 ) -> GraphView:
     if focus is None:
-        nodes = await storage.get_live_nodes(learner_id)
+        # Neither this function nor its callers read node.embedding — fetch the
+        # lighter row (drops the ~1024-float vector column).
+        nodes = await storage.get_live_nodes(learner_id, with_embedding=False)
     else:
         nodes = await _neighborhood(storage, learner_id, focus, hops)
 
@@ -27,7 +38,7 @@ async def build_graph(
     ids = list(nodes_by_id)
     edges = await storage.get_edges(learner_id, ids)
     edges = [e for e in edges if e.source_id in nodes_by_id and e.target_id in nodes_by_id]
-    ev_map = await storage.top_evidence(ids, per_node_evidence)
+    ev_map = await storage.top_evidence(ids, per_node_evidence, with_embedding=False)
 
     return GraphView(
         nodes=[_node_dict(n, ev_map.get(n.id or "", [])) for n in nodes_by_id.values()],
@@ -60,20 +71,14 @@ async def _neighborhood(storage: Any, learner_id: str, focus: str, hops: int) ->
 
 
 def _node_dict(node: Node, evs: list[Evidence]) -> GraphNode:
-    return {
-        "id": node.id,
-        "label": node.label,
-        "type": node.type.value,
-        "summary": node.summary,
-        "mastery": node.mastery,
-        "confidence": node.confidence,
-        "salience": node.salience,
-        "importance": node.importance,
-        "evidence": [
-            {"kind": e.kind.value, "content": e.content, "importance": e.importance}
-            for e in evs
-        ],
-    }
+    return cast(
+        GraphNode,
+        {
+            **node_common_fields(node),
+            "summary": node.summary,
+            "evidence": [evidence_ref(e) for e in evs],
+        },
+    )
 
 
 def _edge_dict(e: Edge) -> GraphEdge:

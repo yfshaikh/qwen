@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
-import math
 from contextlib import asynccontextmanager
+from dataclasses import replace
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
@@ -16,18 +16,12 @@ from engram.core.models import (
     Message,
     Node,
 )
+from engram.core.recall import cosine_similarity
+
+_cosine = cosine_similarity
 
 
 _AUDIT_BASE = datetime(2026, 1, 1, tzinfo=timezone.utc)
-
-
-def _cosine(a: list[float], b: list[float]) -> float:
-    dot = sum(x * y for x, y in zip(a, b))
-    na = math.sqrt(sum(x * x for x in a))
-    nb = math.sqrt(sum(x * x for x in b))
-    if na == 0 or nb == 0:
-        return 0.0
-    return dot / (na * nb)
 
 
 class FakeLLM:
@@ -171,13 +165,14 @@ class FakeStorage:
         ]
 
     async def top_evidence(
-        self, node_ids: list[str], per_node: int
+        self, node_ids: list[str], per_node: int, *, with_embedding: bool = True
     ) -> dict[str, list[Evidence]]:
         out: dict[str, list[Evidence]] = {}
         for nid in node_ids:
             evs = [ev for ev in self.evidence if ev.node_id == nid]
             evs.sort(key=lambda e: (e.importance or 0.0), reverse=True)
-            out[nid] = evs[:per_node]
+            chosen = evs[:per_node]
+            out[nid] = chosen if with_embedding else [replace(e, embedding=None) for e in chosen]
         return out
 
     async def get_pending_events(
@@ -202,15 +197,21 @@ class FakeStorage:
         )
         return evs[-limit:]
 
-    async def get_live_nodes(self, learner_id: str) -> list[Node]:
-        return [
+    async def get_live_nodes(
+        self, learner_id: str, *, with_embedding: bool = True
+    ) -> list[Node]:
+        nodes = [
             n
             for n in self.nodes.values()
             if n.learner_id == learner_id and n.forgotten_at is None
         ]
+        return nodes if with_embedding else [replace(n, embedding=None) for n in nodes]
 
-    async def get_all_nodes(self, learner_id: str) -> list[Node]:
-        return [n for n in self.nodes.values() if n.learner_id == learner_id]
+    async def get_all_nodes(
+        self, learner_id: str, *, with_embedding: bool = True
+    ) -> list[Node]:
+        nodes = [n for n in self.nodes.values() if n.learner_id == learner_id]
+        return nodes if with_embedding else [replace(n, embedding=None) for n in nodes]
 
     @asynccontextmanager
     async def consolidation_lock(self, learner_id: str):
@@ -224,32 +225,49 @@ class FakeStorage:
             self._locked.discard(learner_id)
 
     async def apply_consolidation(self, plan) -> None:
+        idmap = self._insert_new_nodes(plan.new_nodes)
+
+        def resolve_id(x: str) -> str:
+            return idmap.get(x, x)
+
+        self._apply_edge_updates(plan.new_edges, plan.edge_updates, resolve_id)
+        self._insert_new_evidence(plan.new_evidence, resolve_id)
+        self._apply_node_updates(plan.node_updates)
+        self._append_mastery_history(plan.mastery_history, resolve_id)
+        self._write_audit(plan.learner_id, plan.audit)
+        self._stamp_events(plan.processed_event_ids)
+
+    def _insert_new_nodes(self, new_nodes) -> dict[str, str]:
+        """Insert brand-new nodes and return {temp_id: real_id} for resolve_id."""
         idmap: dict[str, str] = {}
-        for n in plan.new_nodes:
+        for n in new_nodes:
             temp = n.id
             n.id = self._next_id()
             idmap[temp] = n.id
             self.nodes[n.id] = n
+        return idmap
 
-        def rid(x: str) -> str:
-            return idmap.get(x, x)
-
-        for e in plan.new_edges:
-            e.source_id = rid(e.source_id)
-            e.target_id = rid(e.target_id)
+    def _apply_edge_updates(self, new_edges, edge_updates, resolve_id) -> None:
+        for e in new_edges:
+            e.source_id = resolve_id(e.source_id)
+            e.target_id = resolve_id(e.target_id)
             self._assert_unique_pair(e)
             e.id = e.id or self._next_id()
             self.edges.append(e)
-        for upd in plan.edge_updates:
+        for upd in edge_updates:
             for e in self.edges:
                 if e.id == upd.id:
                     e.type, e.weight = upd.type, upd.weight
                     e.source_id, e.target_id = upd.source_id, upd.target_id
-        for ev in plan.new_evidence:
+
+    def _insert_new_evidence(self, new_evidence, resolve_id) -> None:
+        for ev in new_evidence:
             ev.id = ev.id or self._next_id()
-            ev.node_id = rid(ev.node_id)
+            ev.node_id = resolve_id(ev.node_id)
             self.evidence.append(ev)
-        for upd in plan.node_updates:
+
+    def _apply_node_updates(self, node_updates) -> None:
+        for upd in node_updates:
             existing = self.nodes.get(upd.id)
             if existing is not None:
                 existing.label = upd.label
@@ -259,17 +277,21 @@ class FakeStorage:
                 existing.importance = upd.importance
                 existing.last_seen_at = upd.last_seen_at
                 existing.forgotten_at = upd.forgotten_at
-        for mp in plan.mastery_history:
-            self._mastery.append({"node_id": rid(mp.node_id), "mastery": mp.mastery,
+
+    def _append_mastery_history(self, mastery_history, resolve_id) -> None:
+        for mp in mastery_history:
+            self._mastery.append({"node_id": resolve_id(mp.node_id), "mastery": mp.mastery,
                                   "confidence": mp.confidence,
                                   "ts": datetime.now(timezone.utc)})  # ponytail: wall-clock ts; tests that assert ordering seed _mastery directly
-        self.audit.extend(plan.audit)
-        for a in plan.audit:
+
+    def _write_audit(self, learner_id: str, audit) -> None:
+        self.audit.extend(audit)
+        for a in audit:
             self._audit_seq += 1
             self._audit_rows.append(
                 {
                     "id": str(self._audit_seq),
-                    "learner_id": plan.learner_id,
+                    "learner_id": learner_id,
                     "op": a.op,
                     "rationale": a.rationale,
                     "model": a.model,
@@ -278,9 +300,11 @@ class FakeStorage:
                     "ts": _AUDIT_BASE + timedelta(microseconds=self._audit_seq),
                 }
             )
-        if plan.processed_event_ids:
+
+    def _stamp_events(self, processed_event_ids) -> None:
+        if processed_event_ids:
             stamp = datetime.now(timezone.utc)
-            ids = set(plan.processed_event_ids)
+            ids = set(processed_event_ids)
             for e in self.events:
                 if e.id in ids:
                     e.consolidated_at = stamp
@@ -401,6 +425,13 @@ class FakeStorage:
                 continue
             counts[(ev.node_id, ev.kind.value)] = counts.get((ev.node_id, ev.kind.value), 0) + 1
         return [{"node_id": nid, "kind": k, "count": c} for (nid, k), c in counts.items()]
+
+    async def last_event_at(self, learner_id: str) -> datetime | None:
+        ts = [e.ts for e in self.events if e.learner_id == learner_id]
+        return max(ts) if ts else None
+
+    async def count_voice_sessions(self, learner_id: str) -> int:
+        return sum(1 for s in self.voice_sessions.values() if s["learner_id"] == learner_id)
 
     async def event_counts_by_day(self, learner_id, days: int = 30) -> list[dict]:
         cutoff = datetime.now(timezone.utc) - timedelta(days=days)

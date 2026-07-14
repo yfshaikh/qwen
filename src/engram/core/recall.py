@@ -8,8 +8,10 @@ unit-testable with fakes.
 
 from __future__ import annotations
 
+import asyncio
 import math
 from dataclasses import dataclass
+from typing import cast
 
 from engram.core.models import (
     Edge,
@@ -18,6 +20,8 @@ from engram.core.models import (
     RecallResult,
     ScoredNode,
     SubgraphEdge,
+    evidence_ref,
+    node_common_fields,
 )
 from engram.core.ports import EmbedderPort, StoragePort
 from engram.core.tokens import TokenCounter
@@ -59,7 +63,7 @@ class Recall:
         self.storage = storage
         self.embedder = embedder
         self.token_count = token_count
-        self.w = weights
+        self.weights = weights
         self.seed_k = seed_k
         self.hops = hops
         self.fanout = fanout
@@ -71,25 +75,33 @@ class Recall:
             return RecallResult(text_block="", subgraph={"nodes": [], "edges": []})
 
         query_vec = (await self.embedder.embed([query]))[0]
-        seeds = await self.storage.vector_search(learner_id, query_vec, self.seed_k)
-        nodes_by_id, edges = await self._expand(learner_id, seeds)
-        ev_map = await self.storage.top_evidence(
-            list(nodes_by_id), self.per_node_evidence
-        )
 
-        scored = self._score(query_vec, nodes_by_id, ev_map)
-        result = self._fill(scored, edges, ev_map, budget)
+        async def _pipeline() -> RecallResult:
+            seeds = await self.storage.vector_search(learner_id, query_vec, self.seed_k)
+            nodes_by_id, edges = await self._expand(learner_id, seeds)
+            ev_map = await self.storage.top_evidence(
+                list(nodes_by_id), self.per_node_evidence, with_embedding=False
+            )
+            scored = self._score(query_vec, nodes_by_id, ev_map)
+            return self._fill(scored, edges, ev_map, budget)
+
         if self.session_buffer:
-            remaining = budget - self.token_count(result.text_block)
+            # get_pending_events depends only on learner_id — fire it alongside
+            # the seed/expand/score/fill pipeline instead of after it.
             # Bound the hot-path fetch: buffer only keeps last _BUFFER_N
             # signal-bearing events; over-fetch a little for non-signal noise.
-            pending = await self.storage.get_pending_events(
-                learner_id, limit=_BUFFER_N * 8)
+            result, pending = await asyncio.gather(
+                _pipeline(),
+                self.storage.get_pending_events(learner_id, limit=_BUFFER_N * 8),
+            )
+            remaining = budget - self.token_count(result.text_block)
             tail = self._session_buffer_block(pending, remaining)
             if tail:
                 joined = f"{result.text_block}\n{tail}" if result.text_block else tail
                 result.text_block = joined
-        return result
+            return result
+
+        return await _pipeline()
 
     async def _expand(
         self, learner_id: str, seeds: list[Node]
@@ -140,9 +152,9 @@ class Recall:
                 imps = [e.importance for e in evs if e.importance is not None]
                 importance = max(imps) if imps else 0.3  # neutral prior for old graphs
             score = (
-                self.w.recency * recency
-                + self.w.importance * importance
-                + self.w.relevance * relevance
+                self.weights.recency * recency
+                + self.weights.importance * importance
+                + self.weights.relevance * relevance
             )
             sub = {"recency": recency, "importance": importance, "relevance": relevance}
             scored.append((score, node, sub))
@@ -249,18 +261,12 @@ class Recall:
     def _node_dict(
         score: float, node: Node, sub: dict[str, float], evs: list[Evidence]
     ) -> ScoredNode:
-        return {
-            "id": node.id,
-            "type": node.type.value,
-            "label": node.label,
-            "mastery": node.mastery,
-            "confidence": node.confidence,
-            "salience": node.salience,
-            "importance": node.importance,
-            "score": score,
-            "scores": sub,
-            "evidence": [
-                {"kind": e.kind.value, "content": e.content, "importance": e.importance}
-                for e in evs
-            ],
-        }
+        return cast(
+            ScoredNode,
+            {
+                **node_common_fields(node),
+                "score": score,
+                "scores": sub,
+                "evidence": [evidence_ref(e) for e in evs],
+            },
+        )
