@@ -16,6 +16,15 @@ See `docs/ARCHITECTURE.md` for the architecture as actually built, and
 
 ## Embedding Engram
 
+Engram exposes three public surfaces — pick the one that matches how you're
+consuming it:
+
+| Surface | Use it for |
+|---|---|
+| `EngramHost` | Production host runtime — construction never raises, `start()` catches and logs connect failures, `consolidate_soon()` runs consolidation in the background. |
+| `Engram` | The direct engine — wires storage/LLM/embedder and implements the memory verbs; embed it in-process, or drive it in tests. |
+| `memory_router` | Optional FastAPI router (`engram.integrations.fastapi`) exposing the HTTP surface — mount it behind your own auth. |
+
 Host apps embed Engram **in-process** via `EngramHost` (not as a separate
 microservice). Typical flow: start the host in your app lifespan, `log_turn` on
 each tutor turn, `consolidate_soon` when a session ends, `recall` into the next
@@ -37,7 +46,7 @@ Engram’s Pydantic models (`engram.integrations.fastapi.MemGraphResponse`, …)
 `response_model`. An optional `memory_router(...)` factory exists if you want a
 turnkey mount.
 
-**TS types:** generate with `python -m engram.export_types` →
+**TS types:** generate with `python tools/export_types.py` →
 `packages/engram-types/`. Vendor or curl that file into your frontend (npm cannot
 install a git monorepo subdirectory at a branch reliably).
 

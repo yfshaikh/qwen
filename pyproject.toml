@@ -46,6 +46,6 @@ target-version = "py312"
 # Guardrail: catch port-contract drift (e.g. a storage method the core calls
 # but that's missing from StoragePort). Deliberately lenient elsewhere — the
 # codebase is duck-typed by design; we type the seams, not everything.
-files = ["src/engram", "tests/typing_probe.py"]
+files = ["src/engram", "tests/typing_probe.py", "tools"]
 python_version = "3.12"
 ignore_missing_imports = true

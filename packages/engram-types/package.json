@@ -20,6 +20,6 @@
     "directory": "packages/engram-types"
   },
   "scripts": {
-    "generate": "cd ../.. && python -m engram.export_types packages/engram-types/index.d.ts"
+    "generate": "cd ../.. && python tools/export_types.py packages/engram-types/index.d.ts"
   }
 }

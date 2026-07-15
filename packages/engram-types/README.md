@@ -1,12 +1,12 @@
 # `@engram/types`
 
 Generated TypeScript interfaces for Engram memory HTTP shapes (from Pydantic
-via `python -m engram.export_types`). **Do not edit `index.d.ts` by hand.**
+via `python tools/export_types.py`). **Do not edit `index.d.ts` by hand.**
 
 ## Regenerate (in the qwen repo)
 
 ```bash
-python -m engram.export_types
+python tools/export_types.py
 # writes packages/engram-types/index.d.ts
 ```
 

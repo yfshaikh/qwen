@@ -1,2 +1,2 @@
-/* Re-export the published package — regenerate via `python -m engram.export_types`. */
+/* Re-export the published package — regenerate via `python tools/export_types.py`. */
 export * from "@engram/types";

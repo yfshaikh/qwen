@@ -207,7 +207,7 @@ Generated from the same Pydantic models:
 
 ```bash
 # in the engram repo
-python -m engram.export_types   # → packages/engram-types/index.d.ts
+python tools/export_types.py   # → packages/engram-types/index.d.ts
 ```
 
 **Do not** depend on `github:…#branch&path:…` — npm cannot install a git
