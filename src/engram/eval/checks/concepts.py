@@ -30,10 +30,24 @@ async def concepts(ctx: EvalContext) -> CheckResult:
     for label in res.missing():
         failures.append(f"missing concept {label!r}")
 
-    # >1 match is either a real duplicate or an over-broad alias. The harness
-    # cannot tell; the reader can, from unmatched_note() plus the labels listed.
+    # >1 match is a duplicate: identity is equality against authored aliases, so a
+    # match is a match. The blind spot is the other way — a variant nobody authored
+    # an alias for is invisible here (see test_concepts_blind_to_unaliased_variant).
+    # max_concepts below is what covers that, since a count cannot be relabelled.
     for label, dupes in res.duplicated().items():
         failures.append(f"concept {label!r} matched {len(dupes)} live nodes: {dupes}")
+
+    # Alias-proof over-extraction gate. Fragmentation ('Flux', 'Flux with angles',
+    # 'EMF from flux change' as three nodes) is the bug this benchmark exists for,
+    # and no identity check catches it — every fragment is a legitimate label. The
+    # cap is deliberately generous: the extras ARE in the transcript, just too
+    # granular, so this asserts proportion, not a curriculum.
+    cap = expect.get("max_concepts")
+    live_concepts = live_nodes(nodes, "concept")
+    if cap is not None and len(live_concepts) > int(cap):
+        failures.append(
+            f"over-extraction: {len(live_concepts)} live concepts, max {cap} "
+            f"({len(required)} expected) — {sorted(str(n.get('label')) for n in live_concepts)}")
 
     dup_pairs = 0
     cross_type = 0

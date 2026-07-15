@@ -32,8 +32,18 @@ def _failed_generation(exc: BaseException) -> str | None:
     truncated mid-string, another returned an empty completion.
     """
     body = getattr(exc, "body", None)
-    err = body.get("error") if isinstance(body, dict) else None
-    if not isinstance(err, dict) or err.get("code") != "json_validate_failed":
+    if not isinstance(body, dict):
+        return None
+    # BOTH shapes, because the SDK's is not what its own error message shows:
+    # AsyncOpenAI._make_status_error does `data = body.get("error", body)`, so
+    # exc.body is the INNER error dict — while str(exc) still prints the full
+    # {'error': {...}} envelope it was built from. Reading the message and
+    # believing it is how the first version of this shipped broken: it checked
+    # body["error"], got None on every real 400, re-raised, and its unit tests
+    # passed because they fabricated the envelope the message implied.
+    inner = body.get("error")
+    err = inner if isinstance(inner, dict) else body
+    if err.get("code") != "json_validate_failed":
         return None
     # "" is a real answer here (the empty-completion case) — it must reach the
     # parser and raise ExtractionError, so don't collapse it to None.

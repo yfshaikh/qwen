@@ -9,16 +9,26 @@ from a real regression, "adjusts accordingly", and makes the code worse chasing 
 ghost. One matcher, one semantic, one place to fix.
 
 MATCHING SEMANTIC
-Case-insensitive substring, consistent with the rest of the harness (arms.py:
-"Scoring is matched by case-insensitive substring so 'Pass calculus final' matches
-'Pass calculus final next month'"). Deliberately NOT a new semantic — divergence
-here would be a second thing to reason about.
+Equality on the normalized label (casefold + collapsed whitespace), against the
+concept's label and its authored aliases.
 
-The cost: substring is loose, so a generic alias ("flux") matches everything it
-appears in ("Magnetic flux", "Flux linkage", "Graph of Φ vs t"). That is why
-ambiguity is REPORTED rather than resolved (see match_concept) — the harness
-cannot tell a real duplicate from an over-broad alias, but a human reading the
-failure can. Keep aliases specific; calibrate them from a real run.
+This diverges from arms.py's case-insensitive substring, which it previously
+copied for consistency. Substring made every short alias a wildcard: `Transformer`
+matched the distinct concept `Transformer turns ratio`, and 3 of the 5 runs in
+variance-em-frozen-v1.md reported a duplicate that did not exist. The original
+reasoned that ambiguity should be REPORTED rather than resolved because "a human
+reading the failure can tell a real duplicate from an over-broad alias" — true,
+but the harness's job is now to gate an agent's fix-loop with no human in it. A
+diagnostic an LLM will act on cannot cost a human read to interpret.
+
+The divergence from arms.py is deliberate: it scores authored goal text against a
+free-text plan, where substring absorbs phrasing drift. Here we compare graph
+labels to authored ground truth, and the drift IS the bug under test.
+
+Equality also makes short aliases safe — under substring, `flux` had to be dropped
+for matching `EMF from flux change`; as an exact form it matches only a node
+labelled exactly "flux". Add aliases for the forms a correct extractor may emit;
+calibrate them from a real run.
 """
 from __future__ import annotations
 
@@ -39,17 +49,34 @@ def live_nodes(nodes: list[dict], node_type: str | None = None) -> list[dict]:
     return out
 
 
+def norm_label(s: str) -> str:
+    """Casefold + collapse whitespace. The whole normalization, deliberately."""
+    return " ".join(str(s).split()).casefold()
+
+
+def mentions_topic(nodes: list[dict], topic: str) -> list[dict]:
+    """Every node whose label CONTAINS `topic`. Containment, not identity.
+
+    The opposite question from match_concept, and it wants the opposite semantic.
+    `abstention` asks "did the extractor invent this topic at all?" — a fabricated
+    'AC Circuits (RLC Impedance)' is the fabricated 'AC Circuits', and equality
+    would wave it through on the parenthetical. Identity checks want exact;
+    did-you-touch-this checks want loose. Don't unify them.
+    """
+    needle = norm_label(topic)
+    return [n for n in nodes if needle and needle in norm_label(n.get("label", ""))]
+
+
 def match_concept(nodes: list[dict], label: str,
                   aliases: dict[str, list[str]] | None = None) -> list[dict]:
-    """Every node whose label contains `label` or one of its aliases.
+    """Every node whose label EQUALS `label` or one of its aliases, normalized.
 
-    Returns a LIST, not a single node, on purpose: >1 match is meaningful. It is
-    either a genuine duplicate (what `concepts`/`no_duplicates` hunts) or an
-    over-broad alias. Collapsing to "the first match" would silently hide both.
+    Returns a LIST, not a single node, on purpose: >1 match is a genuine duplicate
+    (what `concepts`/`no_duplicates` hunts). Collapsing to "the first match" would
+    silently hide it.
     """
-    needles = [f.lower() for f in alias_forms(label, aliases) if f.strip()]
-    return [n for n in nodes
-            if any(needle in str(n.get("label", "")).lower() for needle in needles)]
+    needles = {norm_label(f) for f in alias_forms(label, aliases) if f.strip()}
+    return [n for n in nodes if norm_label(n.get("label", "")) in needles]
 
 
 @dataclass(slots=True)

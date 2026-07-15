@@ -1,3 +1,7 @@
+import httpx
+import pytest
+from openai import AsyncOpenAI, BadRequestError
+
 from engram.adapters.llm.openai_compatible import OpenAICompatibleLLM
 from engram.core.models import Message
 
@@ -194,51 +198,82 @@ async def test_stream_sets_temperature_per_role():
 
 
 # --- Groq json_validate_failed -> partial text ------------------------------
-# Groq validates json_object output server-side and raises 400 with the bad text
-# in `failed_generation`, where OpenAI returns it as a normal completion. The 400
-# escaping complete() kills the whole run and skips Keeper._extract's repair
-# prompt, which is built for exactly this. Real 5x eval run: 2 of 5 runs died here.
+# Groq validates json_object output server-side and raises 400 with the bad text in
+# `failed_generation`, where OpenAI returns it as a normal completion. The 400
+# escaping complete() kills the whole run and skips Keeper._extract's repair prompt,
+# which is built for exactly this. Real 5x eval runs: 3 of 10 died here.
+#
+# THESE TESTS BUILD THE ERROR THROUGH THE SDK'S OWN CODE PATH, from a real
+# httpx.Response, and must keep doing so. The first version hand-rolled an exception
+# with `body={"error": {...}}` — the shape str(exc) prints — and passed while the
+# adapter failed on every real 400, because AsyncOpenAI._make_status_error stores
+# `body.get("error", body)`, i.e. the INNER dict. A fake asserts your assumption; the
+# real constructor asserts the SDK.
 
-class _Boom(Exception):
-    def __init__(self, body):
-        super().__init__("400")
-        self.body = body
+_CLIENT = AsyncOpenAI(api_key="test", base_url="https://example.invalid/v1")
 
 
-def _raiser(body):
-    class _C:
+def _sdk_error(payload: dict) -> BadRequestError:
+    """The exception the SDK itself builds from a 400 carrying `payload`."""
+    request = httpx.Request("POST", "https://example.invalid/v1/chat/completions")
+    response = httpx.Response(400, request=request, json=payload)
+    exc = _CLIENT._make_status_error_from_response(response)
+    assert isinstance(exc, BadRequestError)
+    return exc
+
+
+def _jvf(generation: str) -> dict:
+    return {"error": {"message": "Failed to generate JSON.",
+                      "type": "invalid_request_error",
+                      "code": "json_validate_failed",
+                      "failed_generation": generation}}
+
+
+def _raiser(exc):
+    class _Completions:
         async def create(self, **kwargs):
-            raise _Boom(body)
+            raise exc
     class _Chat:
-        completions = _C()
+        completions = _Completions()
     class _Client:
         chat = _Chat()
     return OpenAICompatibleLLM(client=_Client(), role_to_model={"extractor": "m"})
 
 
-def _jvf(gen):
-    return {"error": {"code": "json_validate_failed", "failed_generation": gen}}
+def test_sdk_stores_inner_error_dict_not_the_envelope():
+    """Pins the SDK behaviour the adapter depends on. If a future openai release
+    stops unwrapping, this fails here — loudly, in the fast suite — instead of as a
+    dead eval run that looks like an Engram bug."""
+    exc = _sdk_error(_jvf("partial"))
+    assert exc.body == _jvf("partial")["error"]      # inner, NOT the envelope
+    assert "'error'" in str(exc)                     # ...while the message shows it
 
 
 async def test_json_validate_failed_returns_partial_text():
-    llm = _raiser(_jvf('{"concepts":[{"label":"EM induc'))
+    llm = _raiser(_sdk_error(_jvf('{"concepts":[{"label":"EM induc')))
     out = await llm.complete("extractor", [Message(role="user", content="q")])
-    assert out.text == '{"concepts":[{"label":"EM induc'   # parser -> ExtractionError -> repair
+    assert out.text == '{"concepts":[{"label":"EM induc'  # -> ExtractionError -> repair
 
 
 async def test_json_validate_failed_with_empty_generation_returns_empty_not_none():
-    """The reasoning-model case: Groq reports the failure with no text at all.
-    Must still return a Completion so the repair prompt fires — a None here would
-    read as 'no output' and could be mistaken for a successful empty extraction."""
-    llm = _raiser(_jvf(""))
+    """The reasoning-model case: Groq reports the failure with no text at all. Must
+    still return a Completion so the repair prompt fires — a None here would read as
+    'no output' and could be mistaken for a successful empty extraction."""
+    llm = _raiser(_sdk_error(_jvf("")))
     out = await llm.complete("extractor", [Message(role="user", content="q")])
     assert out.text == ""
 
 
+async def test_bare_error_dict_shape_also_handled():
+    """Defensive: some providers/versions hand back the envelope unwrapped already."""
+    llm = _raiser(_sdk_error({"code": "json_validate_failed", "failed_generation": "x"}))
+    out = await llm.complete("extractor", [Message(role="user", content="q")])
+    assert out.text == "x"
+
+
 async def test_other_400s_still_raise():
-    """Only json_validate_failed is recoverable. Swallowing e.g. a bad api key
-    would turn a config error into a silently empty graph."""
-    import pytest
-    llm = _raiser({"error": {"code": "invalid_api_key", "message": "nope"}})
-    with pytest.raises(_Boom):
+    """Only json_validate_failed is recoverable. Swallowing e.g. a bad api key would
+    turn a config error into a silently empty graph."""
+    llm = _raiser(_sdk_error({"error": {"code": "invalid_api_key", "message": "nope"}}))
+    with pytest.raises(BadRequestError):
         await llm.complete("extractor", [Message(role="user", content="q")])

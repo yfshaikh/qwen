@@ -1,8 +1,8 @@
 """`preferences` — did the graph learn the learner's standing preferences and
 goals, and did it resist minting a node for every passing remark?
 
-Reads `scenario.expect.preferences.{required,forbidden}` and
-`scenario.expect.goals.required`.
+Reads `scenario.expect.preferences.{required,forbidden,max}` and
+`scenario.expect.goals.{required,forbidden,max}`.
 
 WHY PREFERENCES AND GOALS SHARE A CHECK
 They are the same kind of thing and fail the same way: both are free-form,
@@ -30,7 +30,12 @@ created unopposed. The fix lives in the extraction prompt, not the merge ladder.
 """
 from __future__ import annotations
 
-from engram.eval.checks._match import live_nodes, match_concept, resolve, snapshot_nodes
+from engram.eval.checks._match import (
+    live_nodes,
+    mentions_topic,
+    resolve,
+    snapshot_nodes,
+)
 from engram.eval.registry import CheckResult, EvalContext, check
 
 
@@ -61,15 +66,34 @@ async def preferences(ctx: EvalContext) -> CheckResult:
         for label, dupes in res.duplicated().items():
             failures.append(f"{node_type} {label!r} matched {len(dupes)} nodes: {dupes}")
 
-        # Aliases deliberately NOT applied to forbidden targets: these are literal
-        # labels that must not appear, and broadening them via the alias map would
-        # fail nodes that merely resemble one.
+        # Containment, like abstention: "must not appear" is a different question
+        # from "which node is this?". A transient request minted as a preference is
+        # still minted when it arrives as 'Monster problems, please' — identity
+        # matching would wave through every variant of the thing we're forbidding,
+        # and the extractor's variants are exactly what we cannot predict.
         for label in _forbidden(expect, key):
-            hits = match_concept(live_nodes(nodes, node_type), label, None)
+            hits = mentions_topic(live_nodes(nodes, node_type), label)
             if hits:
                 failures.append(
                     f"transient request minted as a {node_type}: {label!r} matched "
                     f"{[str(n.get('label')) for n in hits]}")
+
+    # The count assertion. `forbidden` can only name spurious labels someone already
+    # saw; across 5 identical runs the extractor invented a DIFFERENT set each time
+    # ('Learn Faraday's law', 'midterm preparation', "master Lenz's law direction"),
+    # so enumeration can never catch up. A count needs no prediction, and unlike
+    # identity matching it cannot be dodged by relabelling — which is what makes it
+    # the honest gate for an agent's fix-loop.
+    for key, node_type in (("preferences", "preference"), ("goals", "goal")):
+        spec = expect.get(key)
+        cap = spec.get("max") if isinstance(spec, dict) else None
+        if cap is None:
+            continue
+        got = live_nodes(nodes, node_type)
+        if len(got) > int(cap):
+            failures.append(
+                f"over-extraction: {len(got)} live {node_type} nodes, max {cap} — "
+                f"{sorted(str(n.get('label')) for n in got)}")
 
     n_pref = len(live_nodes(nodes, "preference"))
     n_goal = len(live_nodes(nodes, "goal"))

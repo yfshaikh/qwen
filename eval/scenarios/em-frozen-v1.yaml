@@ -508,6 +508,14 @@ expect:
       - Hard problems
       - Challenging questions
       - No easy questions
+    # STRICT: the learner states exactly ONE durable preference (s0 turn 1). Any
+    # second live preference is a transient request that got minted.
+    #
+    # This is here because `forbidden` above DEMONSTRABLY MISSED IT: 2 of the 5 runs
+    # in variance-em-frozen-v1.md minted 'hard questions', which matches none of the
+    # three forbidden literals. Enumeration can only name phrasings someone already
+    # saw; the extractor picks a new one. A count needs no prediction.
+    max: 1
   goals:
     required:
       # CALIBRATED: was "Pass the electromagnetism midterm". Both runs emitted
@@ -517,6 +525,26 @@ expect:
       # exactly what the `unmatched labels in graph:` line exists to surface. It
       # named the culprit on the first run.
       - pass electromagnetism midterm
+    # STRICT: one goal is stated (s0 turn 1) and no other, so every extra goal node
+    # is over-extraction by construction. Observed 3-5 live goals across 5 identical
+    # runs — including 'midterm preparation' (a semantic duplicate of the real goal,
+    # which dedup should have merged) and 'Learn Faraday's law' (a topic, not a
+    # goal). The spurious set differed on every run, so no forbidden list can cover
+    # it.
+    max: 1
+
+  # -- Over-extraction ------------------------------------------------------
+  # GENEROUS on purpose: 6 concepts are expected, but 'EMF', 'Superconducting ring'
+  # and friends ARE in the transcript and are not wrong — only too granular. This
+  # asserts proportion, not a curriculum, so a correct-but-detailed extractor still
+  # passes. Observed 11-15 live concepts across 5 identical runs.
+  #
+  # This is the one concept assertion that CANNOT be dodged by relabelling. Identity
+  # matching is equality against authored aliases, so a duplicate wearing a label
+  # nobody predicted is invisible as a duplicate (tests/eval/test_checks_frozen.py::
+  # test_concepts_blind_to_unaliased_variant pins that hole). A count doesn't care
+  # what anything is called.
+  max_concepts: 9
 
   # -- Dedup ----------------------------------------------------------------
   # Absolute, not a rate. The current `dedup` check is a rate over C(n,2) pairs —

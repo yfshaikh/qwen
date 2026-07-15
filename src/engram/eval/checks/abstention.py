@@ -23,7 +23,7 @@ Impedance)", which is the intent.
 """
 from __future__ import annotations
 
-from engram.eval.checks._match import live_nodes, match_concept, snapshot_nodes
+from engram.eval.checks._match import live_nodes, mentions_topic, snapshot_nodes
 from engram.eval.registry import CheckResult, EvalContext, check
 
 
@@ -40,7 +40,9 @@ async def abstention(ctx: EvalContext) -> CheckResult:
     failures: list[str] = []
 
     for target in targets:
-        hits = match_concept(hay, target, None)
+        # Containment, not identity: see mentions_topic. A fabrication wearing a
+        # qualifier ('AC Circuits (RLC Impedance)') is still the fabrication.
+        hits = mentions_topic(hay, target)
         if hits:
             found = [f"{n.get('label')!r}"
                      f"{' (forgotten)' if n.get('forgotten_at') else ''}" for n in hits]

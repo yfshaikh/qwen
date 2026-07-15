@@ -88,15 +88,42 @@ async def test_concepts_red_on_missing():
 
 async def test_concepts_red_on_duplicate_and_reports_unmatched():
     """(a)1/(a)2: the tmp- hole and the dead jaccard layer both surface as two
-    live nodes for one concept."""
+    live nodes for one concept.
+
+    The variant is an AUTHORED ALIAS — that is the whole mechanism. See
+    test_concepts_blind_to_unaliased_variant for what this costs.
+    """
     nodes = GOOD_NODES + [_node("4", "Faraday's law of induction"),
                           _node("5", "Totally Unrelated Thing")]
+    aliases = {"Faraday's law": ["Faraday's law of induction"]}
     res = await run_check(get_check("concepts"),
-                          _ctx([_snap(nodes)], _scenario(CONCEPT_EXPECT)))
+                          _ctx([_snap(nodes)], _scenario(CONCEPT_EXPECT, aliases)))
     assert not res.passed
     assert any("matched 2 live nodes" in d for d in res.details)
     # The line that lets a reader tell a real bug from a stale alias.
     assert any("Totally Unrelated Thing" in d and "unmatched" in d for d in res.details)
+
+
+async def test_concepts_blind_to_unaliased_variant():
+    """KNOWN LIMITATION, pinned so nobody discovers it by trusting a green.
+
+    Identity is equality against authored aliases, so a duplicate wearing a label
+    nobody predicted is invisible AS A DUPLICATE — it lands in the unmatched list
+    instead, and the check passes. It cannot be fixed lexically: 'Faraday's law' vs
+    "Faraday's law of induction" (duplicate) and 'Transformer' vs 'Transformer
+    turns ratio' (distinct concepts) are the same shape, so any rule catching the
+    first false-positives the second. Telling them apart is the semantic problem
+    Engram itself is failing — the harness cannot out-think its subject.
+
+    The unmatched list is therefore a REVIEW SURFACE, not noise: a new variant
+    appearing there is the signal to author an alias. This is the one place a fix
+    can look green while the graph is still duplicated.
+    """
+    nodes = GOOD_NODES + [_node("4", "Faraday's law, restated")]
+    res = await run_check(get_check("concepts"),
+                          _ctx([_snap(nodes)], _scenario(CONCEPT_EXPECT)))
+    assert res.passed  # <- the false green, pinned deliberately
+    assert res.metrics["live_concepts"] == 4.0 and res.metrics["concepts_expected"] == 3.0
 
 
 async def test_concepts_red_on_normalized_duplicate():
@@ -357,3 +384,72 @@ async def test_preferences_ignores_concept_typed_nodes():
     res = await run_check(get_check("preferences"),
                           _ctx([_snap(nodes)], _scenario(PREF_EXPECT)))
     assert res.passed, res.details
+
+
+# --- over-extraction caps ---------------------------------------------------
+# The alias-proof gate. Every other assertion here keys on identity (equality vs
+# authored aliases), so it is blind to any label nobody predicted. These count
+# instead: a fix cannot satisfy them by renaming, only by extracting less.
+
+async def test_goals_over_extraction_red_on_count():
+    """Live: one stated goal became 3-5 goal nodes on every run, incl. 'midterm
+    preparation' — a semantic dupe of the real goal — and 'Learn Faraday's law',
+    a topic. The spurious set differed each run, so `forbidden` cannot cover it."""
+    expect = {"goals": {"required": ["Pass the electromagnetism midterm"], "max": 1}}
+    nodes = [_node("g1", "Pass the electromagnetism midterm", ntype="goal"),
+             _node("g2", "midterm preparation", ntype="goal"),
+             _node("g3", "Learn Faraday's law", ntype="goal")]
+    res = await run_check(get_check("preferences"),
+                          _ctx([_snap(nodes)], _scenario(expect)))
+    assert not res.passed
+    assert any("over-extraction: 3 live goal nodes, max 1" in d for d in res.details)
+
+
+async def test_preference_over_extraction_catches_what_forbidden_missed():
+    """The regression that motivated the cap: `forbidden` lists 'Hard problems',
+    the extractor emitted 'hard questions', and 2 of 5 runs passed with a transient
+    request minted as a durable preference. The count catches it; the list can't."""
+    expect = {"preferences": {"required": ["Short bullet-point answers"],
+                              "forbidden": ["Hard problems"], "max": 1}}
+    nodes = [_node("p1", "short bullet-point answers", ntype="preference"),
+             _node("p2", "hard questions", ntype="preference")]
+    res = await run_check(get_check("preferences"),
+                          _ctx([_snap(nodes)], _scenario(expect)))
+    assert not res.passed
+    assert not any("Hard problems" in d for d in res.details)  # forbidden still blind
+    assert any("over-extraction: 2 live preference nodes, max 1" in d for d in res.details)
+
+
+async def test_caps_absent_means_no_assertion():
+    """No `max` -> no count failure. The cap is opt-in per scenario; a scenario
+    that never authored one must not start failing."""
+    expect = {"goals": {"required": ["Pass the electromagnetism midterm"]}}
+    nodes = [_node("g1", "Pass the electromagnetism midterm", ntype="goal"),
+             _node("g2", "whatever else", ntype="goal")]
+    res = await run_check(get_check("preferences"),
+                          _ctx([_snap(nodes)], _scenario(expect)))
+    assert res.passed, res.details
+
+
+async def test_concepts_max_red_on_fragmentation():
+    """Fragmentation is the bug this benchmark exists for and no identity check
+    sees it — every fragment is a legitimate label. Under the cap it is a failure."""
+    expect = {"concepts": [{"label": "Magnetic flux"}], "max_concepts": 2}
+    nodes = [FLUX, _node("2", "Flux with angles"), _node("3", "EMF from flux change")]
+    res = await run_check(get_check("concepts"),
+                          _ctx([_snap(nodes)], _scenario(expect)))
+    assert not res.passed
+    assert any("over-extraction: 3 live concepts, max 2" in d for d in res.details)
+
+
+async def test_concepts_max_counts_only_live_concepts():
+    """A decayed fragment is no longer clutter, and a goal is not a concept. Both
+    would inflate the count into failing a graph that is actually correct."""
+    expect = {"concepts": [{"label": "Magnetic flux"}], "max_concepts": 1}
+    nodes = [FLUX,
+             _node("2", "Flux with angles", forgotten="2026-01-01"),
+             _node("3", "pass the midterm", ntype="goal")]
+    res = await run_check(get_check("concepts"),
+                          _ctx([_snap(nodes)], _scenario(expect)))
+    assert res.passed, res.details
+    assert res.metrics["live_concepts"] == 1.0
