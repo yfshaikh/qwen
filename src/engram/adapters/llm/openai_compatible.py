@@ -114,6 +114,11 @@ def build_llm(settings: Any) -> OpenAICompatibleLLM:
     client = AsyncOpenAI(
         api_key=settings.openrouter_api_key,
         base_url=settings.openrouter_base_url,
+        # Default is 2, whose backoff tops out well under the ~5s Groq's free tier
+        # asks for; a 429 then surfaces as a failed RUN, which in an eval reads as a
+        # result rather than a hiccup. The SDK honours the Retry-After header, so
+        # this is mostly a raised ceiling on how long it will keep honouring it.
+        max_retries=5,
     )
     roles = ("tutor", "extractor", "reflector", "student", "judge")
     role_to_model = {r: settings.model_for(r) for r in roles}

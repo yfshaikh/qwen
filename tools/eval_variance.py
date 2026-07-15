@@ -63,8 +63,21 @@ async def _one(eng: Any, sc: Scenario, budget: float | None,
         return data
 
 
+def _scored(results: list[dict]) -> list[dict]:
+    """Runs that actually produced verdicts.
+
+    A run that 429s or busts its budget has status `error` and an EMPTY checks list.
+    Filtering only on `crashed` (this script raising) let those count as samples: the
+    first live 5x run had 3 of 5 rate-limited, and the report announced "all 7 checks
+    stable across 5 identical runs" off 2 real ones. A variance tool that overstates
+    its own sample size is worse than no tool.
+    """
+    return [r for r in results if r["status"] != "crashed" and r.get("checks")]
+
+
 def _report(sc: Scenario, results: list[dict], n: int) -> str:
-    ok = [r for r in results if r["status"] != "crashed"]
+    ok = _scored(results)
+    lost = [r for r in results if r not in ok]
     by_check: dict[str, list[dict]] = defaultdict(list)
     for r in ok:
         for c in r.get("checks", []):
@@ -76,11 +89,14 @@ def _report(sc: Scenario, results: list[dict], n: int) -> str:
         f"Generated {datetime.now(timezone.utc).isoformat(timespec='seconds')}",
         f"Runs: {', '.join(r['run_id'] for r in results)}",
         f"Total cost: ${sum(r['cost']['usd'] for r in results):.4f}",
-        f"Crashed: {len(results) - len(ok)}",
+        f"**Scored {len(ok)} of {n} runs.**"
+        + ("" if not lost else
+           " Excluded (produced no verdicts — NOT evidence of stability): "
+           + ", ".join(f"{r['run_id']} ({r['status']})" for r in lost)),
         "",
         "The question this answers: **is each check's verdict stable across "
-        "identical runs?** 5/5 or 0/5 is trustworthy. Anything between is a coin "
-        "flip and cannot verify a fix on its own.",
+        f"identical runs?** {len(ok)}/{len(ok)} or 0/{len(ok)} is trustworthy. "
+        "Anything between is a coin flip and cannot verify a fix on its own.",
         "",
         "## Verdict stability",
         "",
@@ -102,8 +118,12 @@ def _report(sc: Scenario, results: list[dict], n: int) -> str:
         lines.append(f"| `{name}` | {npass}/{len(got)} | {verdict} |")
 
     lines += ["", "## Headline", ""]
-    if not ok:
-        lines.append("**Every run crashed.** Nothing measured.")
+    if len(ok) < 2:
+        lines.append(
+            f"**Only {len(ok)} of {n} runs produced verdicts — variance is "
+            "unmeasurable.** Nothing below is a stability claim. Rerun; if these "
+            "were 429s, the token-per-minute budget is the constraint and "
+            "concurrency cannot buy its way out of it.")
     elif flipping:
         lines.append(
             f"**{len(flipping)} of {len(by_check)} checks flip**: "
@@ -116,8 +136,11 @@ def _report(sc: Scenario, results: list[dict], n: int) -> str:
             "attribution has an anchor instead of being re-decided every session).")
     else:
         lines.append(
-            f"**All {len(by_check)} checks are stable across {len(ok)} identical "
-            "runs.** The eval can gate a fix-loop.")
+            f"**All {len(by_check)} checks held the same verdict across {len(ok)} "
+            "identical runs.**"
+            + (" The eval can gate a fix-loop." if len(ok) >= n else
+               f" But {n - len(ok)} run(s) were lost, so this is a {len(ok)}-sample "
+               "result — weaker than asked for."))
 
     # Distinct failure modes per flipping check: identical text across runs means one
     # bug, differing text means the failure ITSELF is nondeterministic.
@@ -196,14 +219,16 @@ async def main() -> int:
     print(f"\nwrote {out}", file=sys.stderr)
 
     # Exit 1 if any check flips: this script's whole purpose is answering "can a
-    # single run verify a fix?", and a flip means no.
-    ok = [r for r in results if r["status"] != "crashed"]
+    # single run verify a fix?", and a flip means no. Also exit 1 on a short sample —
+    # "no flips seen" across 2 runs when 5 were asked for is an absence of evidence,
+    # and a 0 here would be read as evidence of absence.
+    ok = _scored(results)
     by_check: dict[str, list[bool]] = defaultdict(list)
     for r in ok:
         for c in r.get("checks", []):
             by_check[c["name"]].append(bool(c["passed"]))
     flips = any(0 < sum(v) < len(v) for v in by_check.values())
-    return 1 if (flips or not ok) else 0
+    return 1 if (flips or len(ok) < args.n) else 0
 
 
 if __name__ == "__main__":
