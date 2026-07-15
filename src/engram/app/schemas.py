@@ -1,11 +1,19 @@
-"""Pydantic request/response models for the HTTP service."""
+"""Pydantic request/response models for the HTTP service.
+
+`GraphNode`/`GraphEdge`/`AuditRow` are defined in `engram.core.wire` (the
+single wire-shape source — see that module's docstring) and re-exported
+here so `engram.app.schemas.GraphNode` (etc.) keeps resolving for anyone
+importing them from this module.
+"""
 
 from __future__ import annotations
 
-from datetime import date, datetime
+from datetime import datetime
 from typing import Any
 
 from pydantic import BaseModel, Field
+
+from engram.core.wire import AuditRow, GraphEdge, GraphNode
 
 
 class EventIn(BaseModel):
@@ -51,17 +59,6 @@ class ReportOut(BaseModel):
     skipped: bool
 
 
-class AuditRow(BaseModel):
-    id: str
-    op: str
-    rationale: str | None = None
-    model: str | None = None
-    tokens: int | None = None
-    cost: float | None = None
-    ts: datetime | None = None  # facade passes storage's ts through untyped; a
-    # non-datetime must not 500 /audit past the handler (matches GraphNode.id)
-
-
 class AuditResponse(BaseModel):
     rows: list[AuditRow]
     cursor: datetime | None = None
@@ -83,32 +80,6 @@ class ChatRequest(BaseModel):
     budget: int | None = None
 
 
-class GraphEvidence(BaseModel):
-    kind: str
-    content: str | None = None
-    importance: float | None = None
-
-
-class GraphNode(BaseModel):
-    id: str | None = None  # source (core.models.GraphNode / node.id) permits None;
-    label: str             # required here would 500 /graph past the router's try/except
-    type: str
-    summary: str | None = None
-    mastery: float | None = None
-    confidence: float | None = None
-    salience: float | None = None
-    importance: float | None = None
-    evidence: list[GraphEvidence] = Field(default_factory=list)
-
-
-class GraphEdge(BaseModel):
-    id: str | None = None
-    source: str
-    target: str
-    type: str
-    weight: float
-
-
 class GraphResponse(BaseModel):
     nodes: list[GraphNode]
     edges: list[GraphEdge]
@@ -118,93 +89,5 @@ class HistoryResponse(BaseModel):
     messages: list[ChatMessage]
 
 
-class VoiceSessionOut(BaseModel):
-    id: str
-    started_at: datetime | None = None
-    ended_at: datetime | None = None
-    turns: int = 0
-
-
-class SessionsResponse(BaseModel):
-    sessions: list[VoiceSessionOut]
-
-
-class VoiceTurnOut(BaseModel):
-    id: str
-    role: str
-    text: str
-    ts: datetime | None = None
-
-
-class TurnsResponse(BaseModel):
-    turns: list[VoiceTurnOut]
-
-
 class MemoryStatusResponse(BaseModel):
     consolidating: bool
-
-
-class InsightsSummary(BaseModel):
-    concepts: int
-    edges: int
-    evidence: int
-    avg_mastery: float | None = None
-    avg_confidence: float | None = None
-    forgotten: int
-    fading: int
-    open_misconceptions: int
-    sessions: int
-    last_active: datetime | None = None
-
-
-class MasteryPoint(BaseModel):
-    ts: datetime | None = None
-    mastery: float | None = None
-    confidence: float | None = None
-
-
-class MasteryTimelineResponse(BaseModel):
-    series: dict[str, list[MasteryPoint]] = Field(default_factory=dict)
-
-
-class Hotspot(BaseModel):
-    node_id: str
-    label: str
-    struggle: int
-    mastery: float | None = None
-    trend: str
-
-
-class HotspotsResponse(BaseModel):
-    hotspots: list[Hotspot] = Field(default_factory=list)
-
-
-class ActivityDay(BaseModel):
-    day: date
-    count: int
-
-
-class ActivityResponse(BaseModel):
-    days: list[ActivityDay] = Field(default_factory=list)
-
-
-class ReviewItem(BaseModel):
-    node_id: str
-    label: str
-    score: float
-    reason: str
-
-
-class ReviewQueueResponse(BaseModel):
-    items: list[ReviewItem] = Field(default_factory=list)
-
-
-class Blocker(BaseModel):
-    node_id: str
-    label: str
-    mastery: float
-    path: list[str] = Field(default_factory=list)
-
-
-class BlockersResponse(BaseModel):
-    blockers: list[Blocker] = Field(default_factory=list)

@@ -1,6 +1,6 @@
 """EngramHost lifecycle + DisabledEngram null-object semantics (E1, E2)."""
 from engram.core.engram import Engram
-from engram.host import DisabledEngram, EngramHost
+from engram.runtime.host import DisabledEngram, EngramHost
 from engram.core.models import LearningEvent
 from tests.fakes import FakeEmbedder, FakeLLM, FakeStorage
 

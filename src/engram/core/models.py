@@ -1,4 +1,13 @@
-"""Pure domain types. No I/O, no third-party imports beyond stdlib + dataclasses."""
+"""Pure domain types. No I/O, no third-party imports beyond stdlib + dataclasses.
+
+Shape rule (see `engram.core.wire` for the full statement): dataclasses here
+are the in-process domain objects; the TypedDicts below (`GraphNode`,
+`GraphEdge`, `AuditRow`, `ScoredNode`, ...) type storage *read-output*
+shapes as plain dicts. The HTTP wire versions of `GraphNode`/`GraphEdge`/
+`AuditRow` are Pydantic models defined once in `engram.core.wire` — that
+module is the wire source of truth; these TypedDicts intentionally mirror
+its field names/shapes but are not themselves imported by the wire layer.
+"""
 
 from __future__ import annotations
 

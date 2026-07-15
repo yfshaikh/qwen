@@ -4,13 +4,14 @@ The ONLY place concrete wiring happens. Tests override get_engram with a fake.""
 from __future__ import annotations
 
 from engram.core.engram import Engram
+from engram.runtime.factory import from_env
 
 _engram: Engram | None = None
 
 
 async def init_engram() -> None:
     global _engram
-    _engram = Engram.from_env()
+    _engram = from_env()
     await _engram.connect()
 
 

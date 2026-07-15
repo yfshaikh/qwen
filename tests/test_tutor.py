@@ -71,8 +71,12 @@ async def test_turn_empty_reply_saves_only_utterance():
 
 async def test_turn_reads_history_turns_from_settings(monkeypatch):
     # A non-default ENGRAM_RECALL_HISTORY_TURNS must reach the tutor's turn
-    # limit — proves this is threaded from Settings, not a hardcoded constant.
+    # limit. Exercises the real env -> Settings -> configs_from_settings ->
+    # RecallConfig -> Engram.history_turns -> Tutor chain (storage/llm/embedder
+    # are fakes so `turn()` does no real I/O, but the config plumbing is the
+    # genuine `runtime.factory` mapping, not a hand-built RecallConfig).
     from engram.app.config import Settings
+    from engram.runtime.factory import configs_from_settings
 
     monkeypatch.setenv("OPENROUTER_API_KEY", "sk-or-test")
     monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
@@ -83,9 +87,11 @@ async def test_turn_reads_history_turns_from_settings(monkeypatch):
     monkeypatch.setenv("ENGRAM_MODEL_EMBEDDER", "m")
     monkeypatch.setenv("ENGRAM_RECALL_HISTORY_TURNS", "2")
     settings = Settings(_env_file=None)
+    recall, keeper = configs_from_settings(settings)
 
     llm = FakeLLM(canned_text="ok")
-    eng = Engram(storage=FakeStorage(), llm=llm, embedder=FakeEmbedder(dim=8), settings=settings)
+    eng = Engram(storage=FakeStorage(), llm=llm, embedder=FakeEmbedder(dim=8),
+                 settings=settings, recall=recall, keeper=keeper)
     messages = [
         {"role": "user", "content": "m1"},
         {"role": "assistant", "content": "m2"},

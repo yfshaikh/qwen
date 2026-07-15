@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from collections.abc import AsyncIterator
 from contextlib import AbstractAsyncContextManager
+from datetime import datetime
 from typing import Any, Protocol, runtime_checkable
 
 from engram.core.consolidation import ConsolidationPlan
@@ -41,6 +42,11 @@ class EmbedderPort(Protocol):
 
 @runtime_checkable
 class StoragePort(Protocol):
+    # lifecycle (folded in rather than a separate Lifecycle protocol — every
+    # consumer that needs one storage method needs both)
+    async def connect(self) -> None: ...
+    async def close(self) -> None: ...
+
     async def health(self) -> bool: ...
 
     # writes
@@ -71,6 +77,9 @@ class StoragePort(Protocol):
     async def get_live_nodes(
         self, learner_id: str, *, with_embedding: bool = True
     ) -> list[Node]: ...
+    async def get_all_nodes(
+        self, learner_id: str, *, with_embedding: bool = True
+    ) -> list[Node]: ...
     def consolidation_lock(
         self, learner_id: str
     ) -> AbstractAsyncContextManager[bool]: ...
@@ -91,3 +100,47 @@ class StoragePort(Protocol):
     async def get_audit(
         self, learner_id: str, since: Any = None, limit: int = 100
     ) -> list[dict]: ...
+
+
+@runtime_checkable
+class VoiceStore(Protocol):
+    """Voice-session persistence (host-layer passthroughs on Engram)."""
+
+    async def create_voice_session(self, learner_id: str) -> str: ...
+    async def end_voice_session(self, session_id: str) -> None: ...
+    async def append_voice_turn(
+        self, session_id: str, learner_id: str, role: str, text: str
+    ) -> str: ...
+    async def list_voice_sessions(
+        self, learner_id: str, limit: int = 50
+    ) -> list[dict]: ...
+    async def list_voice_turns(self, session_id: str) -> list[dict]: ...
+    async def count_voice_sessions(self, learner_id: str) -> int: ...
+
+
+@runtime_checkable
+class InsightsStore(Protocol):
+    """The read-only surface `insights.Insights` needs. A structural subset of
+    StoragePort (get_all_nodes/get_live_nodes/get_edges) and VoiceStore
+    (count_voice_sessions) duplicated here rather than inherited, so this
+    protocol stays narrow and read-only — plus the insight-specific
+    aggregation queries below, which live nowhere else."""
+
+    async def get_all_nodes(
+        self, learner_id: str, *, with_embedding: bool = True
+    ) -> list[Node]: ...
+    async def get_live_nodes(
+        self, learner_id: str, *, with_embedding: bool = True
+    ) -> list[Node]: ...
+    async def get_edges(self, learner_id: str, node_ids: list[str]) -> list[Edge]: ...
+    async def count_voice_sessions(self, learner_id: str) -> int: ...
+
+    async def mastery_history(
+        self,
+        learner_id: str,
+        node_ids: list[str] | None = None,
+        since: datetime | None = None,
+    ) -> list[dict]: ...
+    async def evidence_counts_by_kind(self, learner_id: str) -> list[dict]: ...
+    async def event_counts_by_day(self, learner_id: str, days: int = 30) -> list[dict]: ...
+    async def last_event_at(self, learner_id: str) -> datetime | None: ...

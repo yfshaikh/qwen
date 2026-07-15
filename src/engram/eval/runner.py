@@ -84,8 +84,13 @@ async def execute_run(
     pout = price_out_per_m if price_out_per_m is not None else getattr(s, "eval_price_out_per_m", 0.0)
     metered = MeteredLLM(base_eng.llm, price_in_per_m=pin, price_out_per_m=pout,
                          max_cost_usd=max_cost_usd)
+    # Engram no longer reads recall/keeper knobs off `settings` at call time —
+    # carry base_eng's already-resolved configs forward so any env-driven
+    # ENGRAM_RECALL_*/ENGRAM_KEEPER_* override still reaches the run-scoped clone.
     run_eng = Engram(storage=base_eng.storage, llm=metered, embedder=base_eng.embedder,
-                     settings=s, now=clock)
+                     settings=s, now=clock,
+                     recall=getattr(base_eng, "_recall", None),
+                     keeper=getattr(base_eng, "_keeper", None))
 
     learner_id = f"eval:{scenario.id}:run-{run_dir.name.split('-')[-1]}"
     check_names = checks if checks is not None else [c.name for c in scenario.checks]

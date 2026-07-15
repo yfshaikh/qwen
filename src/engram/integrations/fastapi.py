@@ -15,8 +15,8 @@ from typing import Any, Callable
 from fastapi import APIRouter, Depends
 from pydantic import BaseModel, Field
 
-from engram.app.schemas import GraphEdge, GraphNode
-from engram.host import EngramHost
+from engram.core.wire import GraphEdge, GraphNode
+from engram.runtime.host import EngramHost
 
 logger = logging.getLogger("engram.integrations.fastapi")
 

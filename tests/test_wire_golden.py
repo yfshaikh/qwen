@@ -23,7 +23,7 @@ from engram.core.models import (
     Node,
     NodeType,
 )
-from engram.host import EngramHost
+from engram.runtime.host import EngramHost
 from engram.integrations.fastapi import memory_router
 from tests.fakes import FakeEmbedder, FakeLLM, FakeStorage
 
@@ -99,6 +99,41 @@ async def test_audit_wire_shape():
         assert body["rows"], "expected at least one audit row"
         assert sorted(body["rows"][0]) == [
             "cost", "id", "model", "op", "rationale", "tokens", "ts"]
+    finally:
+        app.dependency_overrides.clear()
+
+
+_RECALL_NODE_KEYS = ["confidence", "evidence", "id", "importance", "label",
+                     "mastery", "salience", "score", "scores", "type"]
+_RECALL_EDGE_KEYS = ["id", "source", "target", "type", "weight"]
+_RECALL_SCORES_KEYS = ["importance", "recency", "relevance"]
+
+
+async def test_recall_wire_shape():
+    s = FakeStorage()
+    await _seed(s)
+    # Give the seeded nodes embeddings so vector_search seeds them: FakeEmbedder
+    # produces a query vector of [len(query) % 7] * dim (all components equal),
+    # which is cosine-parallel to any other nonzero constant-valued vector — so
+    # any nonzero embedding here guarantees both nodes are selected as seeds.
+    s.nodes["a"].embedding = [1.0] * 1024
+    s.nodes["b"].embedding = [1.0] * 1024
+    try:
+        async with _client(s) as c:
+            r = await c.post(
+                "/recall",
+                json={"learner_id": LEARNER, "query": "algebra help", "budget": 800},
+            )
+        assert r.status_code == 200
+        body = r.json()
+        assert sorted(body) == ["subgraph", "text_block"]
+        subgraph = body["subgraph"]
+        assert sorted(subgraph) == ["edges", "nodes"]
+        assert subgraph["nodes"], "expected at least one node in the recall subgraph"
+        assert subgraph["edges"], "expected at least one edge in the recall subgraph"
+        assert sorted(subgraph["nodes"][0]) == _RECALL_NODE_KEYS
+        assert sorted(subgraph["nodes"][0]["scores"]) == _RECALL_SCORES_KEYS
+        assert sorted(subgraph["edges"][0]) == _RECALL_EDGE_KEYS
     finally:
         app.dependency_overrides.clear()
 

@@ -10,20 +10,16 @@ from datetime import datetime
 from pathlib import Path
 
 import yaml
-from fastapi import Depends, FastAPI, HTTPException, Request, WebSocket, WebSocketDisconnect
+from fastapi import Depends, FastAPI, HTTPException, Request
 from fastapi.responses import StreamingResponse
 
 from engram.app import deps
 from engram.app.deps import get_engram
 from engram.app.schemas import (
-    ActivityDay,
-    ActivityResponse,
     AddRequest,
     AddResponse,
     AuditResponse,
     AuditRow,
-    Blocker,
-    BlockersResponse,
     ChatMessage,
     ChatRequest,
     ConsolidateRequest,
@@ -32,31 +28,19 @@ from engram.app.schemas import (
     GraphResponse,
     HealthResponse,
     HistoryResponse,
-    Hotspot,
-    HotspotsResponse,
-    InsightsSummary,
-    MasteryTimelineResponse,
     MemoryStatusResponse,
     RecallRequest,
     RecallResponse,
     ReportOut,
-    ReviewItem,
-    ReviewQueueResponse,
-    SessionsResponse,
-    TurnsResponse,
-    VoiceSessionOut,
-    VoiceTurnOut,
 )
 from engram.core.models import LearningEvent
 from engram.eval import runs as eval_runs
 from engram.eval.clock import SimClock
 from engram.eval.runner import execute_run
 from engram.eval.scenario import load_scenario
-from engram.insights import Insights
+from engram.insights.routes import insights_router
 from engram.tutor.tutor import Tutor
-from engram.voice.pipeline import VoicePipeline
-from engram.voice.stt import transcribe as stt_transcribe
-from engram.voice.tts import stream_speech as tts_stream_speech
+from engram.voice.routes import is_consolidating, voice_router
 
 DEFAULT_POLL_SECONDS = 1.0
 HEARTBEAT_SECONDS = 15.0
@@ -72,22 +56,8 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(title="Engram", lifespan=lifespan)
-
-# Per-learner "consolidating" refcount for the live status badge. In-process:
-# ponytail: single-node only; move to Tair/Redis if we scale out.
-_consolidating: dict[str, int] = {}
-
-
-def _mark_consolidating(learner_id: str) -> None:
-    _consolidating[learner_id] = _consolidating.get(learner_id, 0) + 1
-
-
-def _unmark_consolidating(learner_id: str) -> None:
-    n = _consolidating.get(learner_id, 0) - 1
-    if n > 0:
-        _consolidating[learner_id] = n
-    else:
-        _consolidating.pop(learner_id, None)
+app.include_router(insights_router)
+app.include_router(voice_router)
 
 
 @app.get("/health", response_model=HealthResponse)
@@ -176,47 +146,6 @@ async def graph(learner_id: str, focus: str | None = None, eng=Depends(get_engra
     )
 
 
-# --- insights (read-only analytics) ---------------------------------------
-# NB: auth-less like every route here (accepted demo posture).
-@app.get("/insights/summary", response_model=InsightsSummary)
-async def insights_summary(learner_id: str, eng=Depends(get_engram)):
-    return InsightsSummary(**await Insights(eng.storage).summary(learner_id))
-
-
-@app.get("/insights/mastery-timeline", response_model=MasteryTimelineResponse)
-async def insights_timeline(learner_id: str, node_ids: str | None = None,
-                            eng=Depends(get_engram)):
-    # drop blanks so "a,,b" or a trailing comma can't reach ANY($::uuid[]) as an
-    # empty string (asyncpg would reject it -> 500); [] means "no ids" == None.
-    ids = [s for s in node_ids.split(",") if s.strip()] if node_ids else None
-    series = await Insights(eng.storage).mastery_timeline(learner_id, ids or None)
-    return MasteryTimelineResponse(series=series)
-
-
-@app.get("/insights/hotspots", response_model=HotspotsResponse)
-async def insights_hotspots(learner_id: str, k: int = 5, eng=Depends(get_engram)):
-    return HotspotsResponse(
-        hotspots=[Hotspot(**h) for h in await Insights(eng.storage).hotspots(learner_id, k)])
-
-
-@app.get("/insights/activity", response_model=ActivityResponse)
-async def insights_activity(learner_id: str, days: int = 30, eng=Depends(get_engram)):
-    return ActivityResponse(
-        days=[ActivityDay(**d) for d in await Insights(eng.storage).activity(learner_id, days)])
-
-
-@app.get("/insights/review-queue", response_model=ReviewQueueResponse)
-async def insights_review_queue(learner_id: str, k: int = 5, eng=Depends(get_engram)):
-    return ReviewQueueResponse(
-        items=[ReviewItem(**i) for i in await Insights(eng.storage).review_queue(learner_id, k)])
-
-
-@app.get("/insights/blockers", response_model=BlockersResponse)
-async def insights_blockers(learner_id: str, eng=Depends(get_engram)):
-    return BlockersResponse(
-        blockers=[Blocker(**b) for b in await Insights(eng.storage).blockers(learner_id)])
-
-
 # utterance/tutor_explanation are the tutor's event types; map them back to chat
 # roles so a client can resume a conversation. Other event types are not messages.
 _HISTORY_ROLES = {"utterance": "user", "tutor_explanation": "assistant"}
@@ -254,92 +183,9 @@ async def chat(req: ChatRequest, eng=Depends(get_engram)):
     return StreamingResponse(gen(), media_type="text/event-stream")
 
 
-@app.get("/sessions", response_model=SessionsResponse)
-async def sessions(learner_id: str, eng=Depends(get_engram)):
-    rows = await eng.list_voice_sessions(learner_id)
-    return SessionsResponse(sessions=[VoiceSessionOut(**r) for r in rows])
-
-
-@app.get("/sessions/{session_id}/turns", response_model=TurnsResponse)
-async def session_turns(session_id: str, eng=Depends(get_engram)):
-    rows = await eng.list_voice_turns(session_id)
-    return TurnsResponse(turns=[VoiceTurnOut(**r) for r in rows])
-
-
 @app.get("/memory/status", response_model=MemoryStatusResponse)
 async def memory_status(learner_id: str):
-    return MemoryStatusResponse(consolidating=_consolidating.get(learner_id, 0) > 0)
-
-
-@app.websocket("/voice")
-async def voice(ws: WebSocket, learner_id: str, eng=Depends(get_engram)):
-    # NB: inject via Depends (not a direct get_engram() call) so tests'
-    # app.dependency_overrides[get_engram] takes effect on the WS route too.
-    s = eng.settings
-    if not s or not getattr(s, "deepgram_api_key", None):
-        await ws.close(code=1011)
-        return
-    await ws.accept()
-    pipeline = VoicePipeline(
-        eng, api_key=s.deepgram_api_key, stt_model=s.deepgram_stt_model,
-        tts_model=s.deepgram_tts_model, language=s.deepgram_language,
-        transcribe=stt_transcribe, stream_speech=tts_stream_speech,
-    )
-    session_id = await eng.create_voice_session(learner_id)
-    await ws.send_json({"type": "session_started", "session_id": session_id})
-
-    async def send_text(msg: dict) -> None:
-        await ws.send_json(msg)
-
-    async def send_bytes(b: bytes) -> None:
-        await ws.send_bytes(b)
-
-    history: list[dict] = []
-    buffer = bytearray()
-    mime = "audio/webm"
-    try:
-        while True:
-            msg = await ws.receive()
-            if msg["type"] == "websocket.disconnect":
-                break
-            if msg.get("bytes") is not None:
-                buffer.extend(msg["bytes"])
-                continue
-            if msg.get("text") is None:
-                continue
-            data = json.loads(msg["text"])
-            kind = data.get("type")
-            if kind == "start":
-                buffer.clear()
-                mime = data.get("mime_type", "audio/webm")
-            elif kind == "end":
-                audio = bytes(buffer)
-                buffer.clear()
-                user_text, reply = await pipeline.run_turn(
-                    audio, mime, learner_id, history, send_text, send_bytes)
-                if user_text:
-                    await eng.append_voice_turn(session_id, learner_id, "user", user_text)
-                    history.append({"role": "user", "content": user_text})
-                if reply:
-                    await eng.append_voice_turn(session_id, learner_id, "assistant", reply)
-                    history.append({"role": "assistant", "content": reply})
-                    await eng.ingest([
-                        LearningEvent(learner_id=learner_id, type="utterance", text=user_text),
-                        LearningEvent(learner_id=learner_id, type="tutor_explanation", text=reply),
-                    ])
-            elif kind == "goodbye":
-                break
-    except WebSocketDisconnect:
-        pass
-    finally:
-        await eng.end_voice_session(session_id)
-        _mark_consolidating(learner_id)
-        try:
-            await eng.consolidate(learner_id)
-        except Exception:  # best-effort: consolidation must never break teardown
-            pass
-        finally:
-            _unmark_consolidating(learner_id)
+    return MemoryStatusResponse(consolidating=is_consolidating(learner_id))
 
 
 @app.post("/admin/repair-merges")

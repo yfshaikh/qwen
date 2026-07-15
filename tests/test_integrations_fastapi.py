@@ -5,7 +5,7 @@ from httpx import ASGITransport
 
 from engram.core.engram import Engram
 from engram.core.models import Node, NodeType
-from engram.host import EngramHost
+from engram.runtime.host import EngramHost
 from engram.integrations.fastapi import memory_router
 from tests.fakes import FakeEmbedder, FakeLLM, FakeStorage
 

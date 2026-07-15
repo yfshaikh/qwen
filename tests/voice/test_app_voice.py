@@ -60,8 +60,8 @@ def test_voice_ws_turn(eng, monkeypatch):
     async def fake_stream_speech(text, *, api_key, model):
         yield b"MP3"
 
-    monkeypatch.setattr("engram.app.main.stt_transcribe", fake_transcribe)
-    monkeypatch.setattr("engram.app.main.tts_stream_speech", fake_stream_speech)
+    monkeypatch.setattr("engram.voice.routes.stt_transcribe", fake_transcribe)
+    monkeypatch.setattr("engram.voice.routes.tts_stream_speech", fake_stream_speech)
 
     client = TestClient(app)
     with client.websocket_connect("/voice?learner_id=a") as ws:

@@ -110,6 +110,7 @@ async def run_tier2_sweep(
     """
     from engram.core.engram import Engram
     from engram.eval.clock import SimClock
+    from engram.runtime.factory import configs_from_settings
 
     rows: list[dict] = []
     run_id = uuid.uuid4().hex[:8]
@@ -117,8 +118,14 @@ async def run_tier2_sweep(
         learner_id = f"eval:sweep2:{run_id}:{i}"
         settings = eng.settings.model_copy(update=combo) if eng.settings is not None else None
         sess_clock = SimClock()  # fresh per combo; `clock` arg unused (API compat)
+        # Keeper params (tau_high/tau_low/decay/...) must be LIVE per grid
+        # point (see docstring above) — Engram no longer reads them off
+        # `settings` at call time, so they must be passed explicitly here.
+        recall_cfg, keeper_cfg = (
+            configs_from_settings(settings) if settings is not None else (None, None)
+        )
         eng2 = Engram(storage=eng.storage, llm=eng.llm, embedder=eng.embedder,
-                      settings=settings, now=sess_clock)
+                      settings=settings, now=sess_clock, recall=recall_cfg, keeper=keeper_cfg)
         try:
             await rebuild_graph_from_sessions(eng2, sessions, learner_id, clock=sess_clock)
             defaults = (RecallWeights(settings.recall_w_recency, settings.recall_w_importance,

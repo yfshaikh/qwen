@@ -83,6 +83,12 @@ class FakeStorage:
         self._seq += 1
         return f"id-{self._seq}"
 
+    async def connect(self) -> None:
+        pass  # in-memory: nothing to open
+
+    async def close(self) -> None:
+        pass  # in-memory: nothing to release
+
     async def health(self) -> bool:
         return self.healthy
 

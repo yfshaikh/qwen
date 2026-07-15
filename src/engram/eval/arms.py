@@ -88,13 +88,8 @@ def format_baseline_context(history: list[dict], n: int) -> str:
     return "\n".join(f"{h['role']}: {h['content']}" for h in recent)
 
 
-def _history_turns(eng: Any) -> int:
-    s = eng.settings
-    return s.recall_history_turns if s is not None else 10
-
-
 async def _tutor_reply(eng: Any, context: str, history: list[dict]) -> str:
-    prompt = compose(context, history[-_history_turns(eng):])
+    prompt = compose(context, history[-eng.history_turns:])
     out = await eng.llm.complete("tutor", prompt)
     return out.text or ""
 
@@ -110,7 +105,7 @@ async def run_behavior_arm(
 ) -> list[TurnRecord]:
     if mode not in ("on", "baseline"):
         raise ValueError(f"mode must be 'on' or 'baseline', got {mode!r}")
-    n = n if n is not None else _history_turns(eng)
+    n = n if n is not None else eng.history_turns
     history: list[dict] = []
     records: list[TurnRecord] = []
     for turn in learner_turns:

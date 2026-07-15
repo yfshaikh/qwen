@@ -1,4 +1,7 @@
-from engram.core.ports import EmbedderPort, LLMPort, StoragePort
+from engram.adapters.storage.postgres import PostgresStorage
+from engram.core.edges import EDGE_RANK, edge_rank, edge_rank_case_sql
+from engram.core.models import EdgeType
+from engram.core.ports import EmbedderPort, InsightsStore, LLMPort, StoragePort, VoiceStore
 from tests.fakes import FakeEmbedder, FakeLLM, FakeStorage
 
 
@@ -7,6 +10,38 @@ def test_fakes_satisfy_ports():
     assert isinstance(FakeLLM(), LLMPort)
     assert isinstance(FakeEmbedder(), EmbedderPort)
     assert isinstance(FakeStorage(), StoragePort)
+
+
+def test_storage_adapters_satisfy_all_storage_protocols():
+    """Parity gate (invariant #3), promoted from comment to assertion: both
+    storage adapters must expose the full method set of StoragePort,
+    VoiceStore, AND InsightsStore. runtime_checkable isinstance() checks
+    method presence, so dropping a method from either adapter — or adding one
+    to a protocol without implementing it on both — fails this test.
+
+    PostgresStorage("postgresql://unused") is safe to construct: __init__
+    only stores the DSN, it never connects."""
+    fake = FakeStorage()
+    pg = PostgresStorage("postgresql://unused/ports-contract-shape-check")
+    for protocol in (StoragePort, VoiceStore, InsightsStore):
+        assert isinstance(fake, protocol), f"FakeStorage missing {protocol.__name__} methods"
+        assert isinstance(pg, protocol), f"PostgresStorage missing {protocol.__name__} methods"
+
+
+def test_edge_rank_case_sql_agrees_with_edge_rank_for_every_edge_type():
+    """PostgresStorage.merge_nodes generates its collision tie-break CASE from
+    EDGE_RANK (edges.py); this asserts the generated SQL and edge_rank() (what
+    FakeStorage calls) agree for EVERY EdgeType, not just one, so the two
+    engines can never silently diverge on ranking again."""
+    sql = edge_rank_case_sql("x.type")
+    default_type, default_rank = min(EDGE_RANK.items(), key=lambda kv: kv[1])
+    for t in EdgeType:
+        rank = edge_rank(t)
+        if t == default_type:
+            assert f"ELSE {default_rank} END" in sql
+            assert f"WHEN '{t.value}'" not in sql  # covered by ELSE, not a WHEN
+        else:
+            assert f"WHEN '{t.value}' THEN {rank}" in sql
 
 
 async def test_fake_llm_records_calls():

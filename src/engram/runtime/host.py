@@ -18,6 +18,9 @@ from typing import Any
 from engram.core.consolidation import ConsolidationReport
 from engram.core.models import GraphView, LearningEvent, RecallResult
 
+# Deliberately "engram.host", not this module's path (engram.runtime.host): the
+# logger name is an operational contract that consumers' log filters key on, so it
+# stays stable across internal moves. Don't "fix" it to match the module.
 logger = logging.getLogger("engram.host")
 
 
@@ -89,8 +92,8 @@ class EngramHost:
         self._tasks: set[asyncio.Task] = set()          # Task 4 fills these
         self._consolidating: dict[str, dict] = {}       # Task 4
         # test seam: swap the factory without touching Engram
-        from engram.core.engram import Engram
-        self._engram_factory = Engram.from_env
+        from engram.runtime.factory import from_env
+        self._engram_factory = from_env
 
     @classmethod
     def from_env(cls, **kwargs: Any) -> "EngramHost":

@@ -11,13 +11,13 @@ prior result (e.g. `get_edges` needs the live node ids) stay sequential.
 from __future__ import annotations
 
 import asyncio
-from typing import Any
 
+from engram.core.ports import InsightsStore
 from engram.insights import queries, review
 
 
 class Insights:
-    def __init__(self, storage: Any) -> None:
+    def __init__(self, storage: InsightsStore) -> None:
         self._s = storage
 
     async def _live_edges(self, learner_id: str, node_ids: list[str]) -> list:
@@ -31,7 +31,7 @@ class Insights:
             self._s.last_event_at(learner_id),
         )
         live = [n for n in all_nodes if n.forgotten_at is None]
-        edges = await self._live_edges(learner_id, [n.id for n in live])
+        edges = await self._live_edges(learner_id, [n.id for n in live if n.id])
         return queries.summarize(live, all_nodes, len(edges), ev, sessions, last_active)
 
     async def mastery_timeline(self, learner_id: str,
@@ -63,7 +63,7 @@ class Insights:
             self._s.get_live_nodes(learner_id, with_embedding=False),
             self._s.evidence_counts_by_kind(learner_id),
         )
-        edges = await self._live_edges(learner_id, [n.id for n in live])
+        edges = await self._live_edges(learner_id, [n.id for n in live if n.id])
         # SUM across kinds — a node can have both quiz_wrong AND struggle rows.
         # (A dict comprehension would be last-wins; that disagrees with
         # queries.rank_hotspots, which sums.)
@@ -76,5 +76,5 @@ class Insights:
     async def blockers(self, learner_id: str,
                        target_ids: list[str] | None = None) -> list[dict]:
         live = await self._s.get_live_nodes(learner_id, with_embedding=False)
-        edges = await self._live_edges(learner_id, [n.id for n in live])
+        edges = await self._live_edges(learner_id, [n.id for n in live if n.id])
         return review.blockers(live, edges, target_ids)

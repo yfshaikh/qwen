@@ -27,9 +27,7 @@ class Tutor:
         yield "context", {"text_block": res.text_block, "subgraph": res.subgraph}
 
         reply = ""
-        s = self.eng.settings
-        history_turns = s.recall_history_turns if s is not None else 10
-        prompt = compose(res.text_block, messages[-history_turns:])
+        prompt = compose(res.text_block, messages[-self.eng.history_turns:])
         async for delta in self.eng.llm.stream("tutor", prompt):
             reply += delta
             yield "delta", {"text": delta}

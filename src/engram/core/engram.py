@@ -15,6 +15,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any
 
+from engram.core.config import KeeperConfig, RecallConfig
 from engram.core.models import AuditRow, GraphView, LearningEvent, RecallResult
 
 if TYPE_CHECKING:
@@ -32,6 +33,8 @@ class Engram:
         settings: Any = None,
         token_count: Any = None,
         now: Any = None,
+        recall: RecallConfig | None = None,
+        keeper: KeeperConfig | None = None,
     ) -> None:
         from engram.core.tokens import heuristic_token_count
 
@@ -41,6 +44,16 @@ class Engram:
         self.settings = settings
         self._token_count = token_count or heuristic_token_count
         self._now = now
+        self._recall = recall or RecallConfig()
+        self._keeper = keeper or KeeperConfig()
+
+    @property
+    def history_turns(self) -> int:
+        """How many trailing conversation turns hosts should feed into a
+        prompt. Domain knob — reads `RecallConfig`, never `settings`, so it
+        works the same whether `Engram` was built via `from_env()` or
+        constructed directly with an explicit `recall=RecallConfig(...)`."""
+        return self._recall.history_turns
 
     # --- construction & lifecycle ---------------------------------------
 
@@ -50,20 +63,15 @@ class Engram:
 
         Pass `_env_file=None` to ignore any on-disk .env (used in tests).
         Call `await connect()` afterwards to open the storage pool.
-        """
-        from engram.adapters.llm.openai_compatible import build_llm
-        from engram.adapters.llm.openai_embedder import build_embedder
-        from engram.adapters.storage.postgres import PostgresStorage
-        from engram.app.config import Settings
 
-        settings = Settings(**settings_kwargs)
-        return cls(
-            storage=PostgresStorage(settings.database_url),
-            llm=build_llm(settings),
-            embedder=build_embedder(settings),
-            settings=settings,
-            now=now,
-        )
+        Thin compatibility shim: the composition root lives in
+        `engram.runtime.factory.from_env` (this package stays free of
+        outward-facing wiring imports); this delegates so the public
+        `Engram.from_env()` name Marfini and older callers use keeps working.
+        """
+        from engram.runtime.factory import from_env as _factory_from_env
+
+        return _factory_from_env(now=now, **settings_kwargs)
 
     async def connect(self) -> None:
         connect = getattr(self.storage, "connect", None)
@@ -91,39 +99,28 @@ class Engram:
     ) -> RecallResult:
         from engram.core.recall import Recall, RecallWeights
 
-        s = self.settings
-        if s is not None:
-            weights = RecallWeights(
-                s.recall_w_recency, s.recall_w_importance, s.recall_w_relevance
-            )
-            recall = Recall(
-                self.storage, self.embedder, self._token_count, weights,
-                seed_k=s.recall_seed_k, hops=s.recall_hops, fanout=s.recall_fanout,
-                session_buffer=s.recall_session_buffer,
-            )
-            budget = budget if budget is not None else s.recall_default_budget
-        else:
-            recall = Recall(
-                self.storage, self.embedder, self._token_count, RecallWeights()
-            )
-            budget = budget if budget is not None else 800
+        r = self._recall
+        weights = RecallWeights(r.w_recency, r.w_importance, r.w_relevance)
+        recall = Recall(
+            self.storage, self.embedder, self._token_count, weights,
+            seed_k=r.seed_k, hops=r.hops, fanout=r.fanout,
+            session_buffer=r.session_buffer,
+        )
+        budget = budget if budget is not None else r.default_budget
         return await recall.run(learner_id, query, budget)
 
     def _make_keeper(self) -> Keeper:
         from engram.core.keeper import Keeper, KeeperParams
 
-        s = self.settings
-        if s is not None:
-            params = KeeperParams(
-                tau_high=s.keeper_tau_high,
-                tau_low=s.keeper_tau_low,
-                ewma_alpha=s.keeper_ewma_alpha,
-                salience_bump=s.keeper_salience_bump,
-                prune_floor=s.keeper_prune_floor,
-                decay=s.recall_decay,
-            )
-        else:
-            params = KeeperParams()
+        k = self._keeper
+        params = KeeperParams(
+            tau_high=k.tau_high,
+            tau_low=k.tau_low,
+            ewma_alpha=k.ewma_alpha,
+            salience_bump=k.salience_bump,
+            prune_floor=k.prune_floor,
+            decay=k.decay,
+        )
         return Keeper(self.storage, self.llm, self.embedder, params, clock=self._now)
 
     async def consolidate(self, learner_id: str):

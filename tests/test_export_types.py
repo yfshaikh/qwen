@@ -1,7 +1,7 @@
 """TS type generator: pydantic model_json_schema → TypeScript interfaces."""
 from pathlib import Path
 
-from engram.export_types import _type_of, emit_ts
+from tools.export_types import _type_of, emit_ts
 
 
 def test_emit_contains_expected_shapes():
@@ -15,7 +15,7 @@ def test_emit_contains_expected_shapes():
 
 def test_default_cli_path_is_types_package(tmp_path, monkeypatch):
     """Canonical output lives in packages/engram-types (git-path npm package)."""
-    from engram import export_types as et
+    from tools import export_types as et
 
     assert et._DEFAULT_OUT == Path("packages/engram-types/index.d.ts")
     # write into a temp tree via explicit argv (don't pollute cwd)
