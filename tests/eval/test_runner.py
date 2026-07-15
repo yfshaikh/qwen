@@ -94,3 +94,73 @@ async def test_execute_run_unknown_check_fails_fast(tmp_path):
     sc = _scenario(checks=[CheckSpec(name="nope")])
     data = await execute_run(_eng(), sc, tmp_path, clock=SimClock())
     assert data["status"] == "error" and "nope" in data["error"]
+
+
+# --- frozen transcript replay -----------------------------------------------
+
+class _CountingLLM(FakeLLM):
+    """Records which roles were called, so a test can assert what DIDN'T run."""
+    def __init__(self, *a, **kw):
+        super().__init__(*a, **kw)
+        self.roles: list[str] = []
+
+    async def complete(self, role, messages, schema=None):
+        self.roles.append(role)
+        return await super().complete(role, messages, schema)
+
+
+TRANSCRIPT = [{"role": "user", "content": "what is magnetic flux?"},
+              {"role": "assistant", "content": "- Phi = B.A.cos(theta)"}]
+
+
+def _frozen_scenario(checks=None):
+    return Scenario(
+        id="frozen", persona="p", hidden_state={},
+        sessions=[Session(turns=1, transcript=TRANSCRIPT)],
+        probes=[Probe(query="flux", expect_nodes=["Limits"])],
+        checks=checks or [CheckSpec(name="integrity")])
+
+
+async def test_frozen_replay_calls_extractor_only(tmp_path):
+    """THE point of freezing. A generated session varies three LLMs per turn —
+    student, tutor, extractor — so a graph difference is unattributable. Replaying
+    the student and tutor text leaves the extractor as the only variable, which is
+    what makes a run a measurement rather than a dice roll.
+    """
+    llm = _CountingLLM(canned_text=EXTRACTION)
+    data = await execute_run(_eng(llm=llm), _frozen_scenario(), tmp_path, clock=SimClock())
+    assert data["status"] == "passed"
+    assert "student" not in llm.roles, "frozen replay must not invoke the student"
+    assert "tutor" not in llm.roles, "frozen replay must not invoke the tutor"
+    assert "extractor" in llm.roles, "consolidation must still run"
+
+
+async def test_frozen_replay_ingests_the_authored_text_verbatim(tmp_path):
+    llm = _CountingLLM(canned_text=EXTRACTION)
+    data = await execute_run(_eng(llm=llm), _frozen_scenario(), tmp_path, clock=SimClock())
+    got = [(t["role"], t["content"]) for t in data["transcript"]]
+    assert got == [("user", TRANSCRIPT[0]["content"]),
+                   ("assistant", TRANSCRIPT[1]["content"])]
+    # Both sides land as events, so the extractor sees the same pair a generated
+    # run would have produced.
+    lines = (tmp_path / "transcript.jsonl").read_text().strip().splitlines()
+    assert len(lines) == 2
+
+
+async def test_frozen_replay_warns_when_temperature_unpinned(tmp_path):
+    """A frozen transcript pins the input, leaving sampling as the only variance.
+    Unpinned, the fixture still runs but is not a gate — and silently reporting an
+    irreproducible number is how a coin flip gets mistaken for a verified fix."""
+    events = []
+    await execute_run(_eng(), _frozen_scenario(), tmp_path, clock=SimClock(),
+                      emit=lambda e: events.append(e))
+    warn = [e for e in events if e.get("type") == "error" and "temperature" in e.get("message", "")]
+    assert warn and "not reproducible" in warn[0]["message"]
+
+
+async def test_generated_run_does_not_warn_about_temperature(tmp_path):
+    events = []
+    await execute_run(_eng(), _scenario(), tmp_path, clock=SimClock(),
+                      emit=lambda e: events.append(e))
+    assert not [e for e in events
+                if e.get("type") == "error" and "temperature" in e.get("message", "")]

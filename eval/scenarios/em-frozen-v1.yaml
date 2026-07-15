@@ -84,10 +84,17 @@ sessions:
 
   # ---- Session 0 (day 0) — Ohm's law mastery, first contact, flux ----------
   - transcript:
+      # Ohm's law as an unambiguous DEMONSTRATION, not a request for confirmation.
+      # It first read "...gives 3 A, right?" — and run b060e838 extracted that as
+      # `asked_about` (inert), which is defensible: the learner was asking, not
+      # demonstrating. Mastery stayed None and `expect.mastery` failed for a reason
+      # that was about the transcript's phrasing, not the Keeper. A benchmark turn
+      # must be unambiguous about what it is testing, or it tests the wrong thing.
       - role: user
         content: |-
-          Quick sanity check before I start: Ohm's law — 12 V across 4 Ω gives 3 A, right?
-          Also I prefer short bullet-point answers, saves me time.
+          Before we start: I've got Ohm's law down cold. V = IR, so 12 V across 4 Ω
+          is 3 A. No issues there.
+          I prefer short bullet-point answers, saves me time.
           Goal is passing the electromagnetism midterm in three weeks.
       - role: assistant
         content: |-
@@ -148,15 +155,22 @@ sessions:
         content: |-
           - It encodes opposition: the induced EMF fights the flux change.
           - That's Lenz's law, and it falls out of energy conservation.
-          - Faraday gives you the size; Lenz gives you the sign.
+          - Quick check before we move on: WHY does the induced current oppose the magnet?
 
+      # The misconception, as an explicit WRONG ANSWER to an explicit question.
+      # Phrased this way on purpose: only quiz_correct/quiz_wrong/struggle/
+      # demonstrated carry a mastery signal (core/mastery.py KIND_OBSERVATION) —
+      # explained/asked_about/note are inert. A misconception merely *stated*
+      # would likely be tagged `explained`, leaving mastery=None, and
+      # expect.mastery could then never go green. A wrong answer to a posed
+      # question should extract as quiz_wrong (0.0).
       - role: user
         content: |-
-          Ok here's how I've got it. The current opposes the magnet's motion because energy
-          gets lost as heat in the coil — the heat is what causes the resistance to motion.
+          Because energy gets lost as heat in the coil — the heat is what causes the
+          resistance to the magnet's motion.
       - role: assistant
         content: |-
-          - Careful, that's backwards.
+          - That's wrong, and it's the most common wrong answer here.
           - The opposition comes from the induced current's own field opposing the flux *change*.
           - Heat (I²R) is a consequence of the current, not the cause of the force.
 
@@ -217,7 +231,22 @@ sessions:
           of the current existing.
       - role: assistant
         content: |-
-          - That's it. You've got Lenz's law now.
+          - Then say it back to me: a magnet approaches a loop. Which way does the induced
+            current flow, and why?
+
+      # The correction, as an explicit CORRECT ANSWER. Same reasoning as the s1
+      # wrong answer: "that clicks" alone is inert (explained), so mastery would
+      # never rise and `increased_from_session` could never be satisfied. A right
+      # answer to a posed question should extract as quiz_correct (1.0) or
+      # demonstrated (0.9) — either satisfies the arc.
+      - role: user
+        content: |-
+          Flux through the loop is increasing, so the induced current flows to make its own
+          field oppose that increase — it fights the *change in flux*, not the motion, and
+          not because of heat.
+      - role: assistant
+        content: |-
+          - Correct. That's Lenz's law, and you've got it.
           - ΔΦ → EMF → current → opposing field. Heat rides along without steering.
 
       - role: user
@@ -293,17 +322,42 @@ expect:
   # up. Same for `Mutual inductance` (flagged as the missing step between
   # Faraday's law and Transformer).
   #
-  # calibrated_from: null   # ← set to a run id once step 5 is done
+  # CALIBRATED from runs a2b4c404 + b060e838 (gpt-oss-120b @ temp 0, frozen input).
+  # Matching is case-insensitive substring, so pure case drift needs no alias.
+  #
+  # What the two runs actually showed:
+  #   - Drift is overwhelmingly CASE ('Magnetic flux'/'magnetic flux',
+  #     'transformers'/'Transformers') — already handled, no alias needed.
+  #   - Stable across BOTH runs: 'EM induction', "Faraday's law", "Ohm's law",
+  #     'pass electromagnetism midterm', 'short bullet-point answers'.
+  #   - Genuinely unstable: the induction umbrella ('Electromagnetic induction' vs
+  #     'electromagnetic induction' vs 'EM induction') — which is the near-duplicate
+  #     bait doing its job, not an alias problem.
+  #
+  # calibrated_from: [a2b4c404, b060e838]
+  #
+  # ⚠️ RE-CALIBRATE ON ANY MODEL CHANGE. These record what THIS extractor emits.
+  # Switching to Qwen/DashScope invalidates them, and a stale alias makes every
+  # identity-keyed check fail for the wrong reason.
   concepts:
     - label: Ohm's law
       aliases: [Ohms law, Ohm law]
     - label: Electromagnetic induction
+      # Both surface forms observed; they must resolve to ONE node. Two matches
+      # here is the near-duplicate bait firing, and it has fired on every run.
       aliases: [EM induction, electromagnetic induction]
     - label: Magnetic flux
-      aliases: [flux, magnetic flux, "Φ"]
+      # Dropped 'flux' and 'Φ' — both far too generic for substring matching.
+      # 'flux' matched 'EMF from flux change' (b060e838) and 'flux change'
+      # (a2b4c404), neither of which is a duplicate of magnetic flux. That was a
+      # false positive manufactured by my own alias, exactly the over-broad-alias
+      # risk documented in checks/_match.py.
+      aliases: [magnetic flux]
     - label: Faraday's law
       aliases: [Faraday law, Faradays law]
     - label: Lenz's law
+      # "Lenz's law (minus sign)" (b060e838) matches on substring already — the
+      # extractor folding 'minus sign' into the concept is GOOD behaviour, not drift.
       aliases: [Lenz law, Lenzs law]
     - label: Transformer
       aliases: [Transformers]
@@ -456,7 +510,13 @@ expect:
       - No easy questions
   goals:
     required:
-      - Pass the electromagnetism midterm
+      # CALIBRATED: was "Pass the electromagnetism midterm". Both runs emitted
+      # 'pass electromagnetism midterm' (no "the"), so substring matching missed it
+      # and `preferences` reported a missing goal that was sitting in the graph.
+      # A textbook false negative from a predicted-rather-than-observed label — and
+      # exactly what the `unmatched labels in graph:` line exists to surface. It
+      # named the culprit on the first run.
+      - pass electromagnetism midterm
 
   # -- Dedup ----------------------------------------------------------------
   # Absolute, not a rate. The current `dedup` check is a rate over C(n,2) pairs —
@@ -478,11 +538,11 @@ probes:
 checks:
   - recall_probes
   - integrity
-  # ⚠️ None of the following exist yet. Build + mutation-test each (roadmap §4.3).
-  - edges              # NEW — (b)3, (b)4. Nothing checks relations today.
-  - abstention         # NEW — hallucinated curriculum.
-  - knowledge_update   # NEW — misconception → correction.
-  - concepts           # NEW — required concepts present, absolute dedup.
+  - edges              # (b)3, (b)4. Nothing checked relations before this.
+  - abstention         # hallucinated curriculum.
+  - knowledge_update   # misconception → correction.
+  - concepts           # required concepts present, absolute + cross-type dedup.
+  - preferences        # durable preferences/goals, and transient-request rejection.
   # Deliberately omitted: `dedup` (superseded by expect.no_duplicates),
   # `behavior` (needs the live tutor — not this fixture's job).
   #

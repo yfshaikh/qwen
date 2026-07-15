@@ -22,9 +22,14 @@ class _AsyncChatClient(Protocol):
 class OpenAICompatibleLLM:
     """Implements core.ports.LLMPort against any OpenAI-compatible chat API."""
 
-    def __init__(self, client: _AsyncChatClient, role_to_model: dict[str, str]) -> None:
+    def __init__(self, client: _AsyncChatClient, role_to_model: dict[str, str],
+                 role_to_temperature: dict[str, float] | None = None) -> None:
         self._client = client
         self._role_to_model = role_to_model
+        # Absent role -> omit `temperature` entirely and take the provider
+        # default. Not the same as passing 0.0, and not the same as passing 1.0 —
+        # providers differ on their default, so we don't guess one.
+        self._role_to_temperature = role_to_temperature or {}
 
     async def complete(
         self,
@@ -37,6 +42,9 @@ class OpenAICompatibleLLM:
             "model": model,
             "messages": [asdict(m) for m in messages],
         }
+        temperature = self._role_to_temperature.get(role)
+        if temperature is not None:
+            kwargs["temperature"] = temperature
         if schema is not None:
             # OpenAI-compatible json_object mode; the prompt itself must describe
             # the schema for the model. (Structured parsing lands in Phase 2.)
@@ -64,11 +72,15 @@ class OpenAICompatibleLLM:
         return Completion(text=text, usage=usage, model=getattr(resp, "model", model))
 
     async def stream(self, role: str, messages: list[Message]) -> AsyncIterator[str]:
-        resp = await self._client.chat.completions.create(
-            model=self._resolve(role),
-            messages=[asdict(m) for m in messages],
-            stream=True,
-        )
+        kwargs: dict[str, Any] = {
+            "model": self._resolve(role),
+            "messages": [asdict(m) for m in messages],
+            "stream": True,
+        }
+        temperature = self._role_to_temperature.get(role)
+        if temperature is not None:
+            kwargs["temperature"] = temperature
+        resp = await self._client.chat.completions.create(**kwargs)
         async for chunk in resp:
             delta = chunk.choices[0].delta.content if chunk.choices else None
             if delta:
@@ -103,11 +115,12 @@ def build_llm(settings: Any) -> OpenAICompatibleLLM:
         api_key=settings.openrouter_api_key,
         base_url=settings.openrouter_base_url,
     )
-    role_to_model = {
-        "tutor": settings.model_for("tutor"),
-        "extractor": settings.model_for("extractor"),
-        "reflector": settings.model_for("reflector"),
-        "student": settings.model_for("student"),
-        "judge": settings.model_for("judge"),
+    roles = ("tutor", "extractor", "reflector", "student", "judge")
+    role_to_model = {r: settings.model_for(r) for r in roles}
+    # Only roles with a configured temperature land in the map; the rest keep the
+    # provider default (see OpenAICompatibleLLM.__init__).
+    role_to_temperature = {
+        r: t for r in roles if (t := settings.temperature_for(r)) is not None
     }
-    return OpenAICompatibleLLM(client=client, role_to_model=role_to_model)
+    return OpenAICompatibleLLM(client=client, role_to_model=role_to_model,
+                               role_to_temperature=role_to_temperature)

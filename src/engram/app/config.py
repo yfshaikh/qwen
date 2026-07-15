@@ -40,6 +40,25 @@ class Settings(BaseSettings):
     model_student: str | None = Field(default=None, alias="ENGRAM_MODEL_STUDENT")
     model_judge: str | None = Field(default=None, alias="ENGRAM_MODEL_JUDGE")
 
+    # Role -> sampling temperature. None = provider default (today's behavior;
+    # nothing changes unless you set one).
+    #
+    # Why per-role: a frozen-transcript eval (eval/scenarios/em-frozen-v1.yaml)
+    # pins the input, which makes SAMPLING the only remaining source of variance.
+    # Extractor+reflector at 0 is what turns that fixture into a gate. The tutor
+    # is deliberately left alone — docs/eval-harness.md #1 deferred pinning
+    # temperature because it "would also change the production tutor"; per-role
+    # is exactly the seam that makes the deferral unnecessary.
+    #
+    # Caveat: temperature=0 is not bit-deterministic on most providers (request
+    # batching, float non-associativity). Close enough to gate on; not close
+    # enough to assume.
+    temperature_tutor: float | None = Field(default=None, alias="ENGRAM_TEMPERATURE_TUTOR")
+    temperature_extractor: float | None = Field(default=None, alias="ENGRAM_TEMPERATURE_EXTRACTOR")
+    temperature_reflector: float | None = Field(default=None, alias="ENGRAM_TEMPERATURE_REFLECTOR")
+    temperature_student: float | None = Field(default=None, alias="ENGRAM_TEMPERATURE_STUDENT")
+    temperature_judge: float | None = Field(default=None, alias="ENGRAM_TEMPERATURE_JUDGE")
+
     embedding_dim: int = Field(default=1024, alias="ENGRAM_EMBEDDING_DIM")
 
     # Recall scoring + traversal (spec §4.4); env-overridable for eval sweeps.
@@ -89,3 +108,20 @@ class Settings(BaseSettings):
             return table[role]
         except KeyError as e:
             raise KeyError(f"Unknown LLM role: {role!r}") from e
+
+    def temperature_for(self, role: str) -> float | None:
+        """Sampling temperature for a role, or None to use the provider default.
+
+        Deliberately does NOT fall back the way model_for does (student->tutor,
+        judge->reflector): a temperature is a sampling choice per call site, and
+        silently inheriting the tutor's would be surprising. Unknown roles (e.g.
+        "embedder") return None rather than raising — an embedder has no
+        temperature, and callers pass whatever role they hold.
+        """
+        return {
+            "tutor": self.temperature_tutor,
+            "extractor": self.temperature_extractor,
+            "reflector": self.temperature_reflector,
+            "student": self.temperature_student,
+            "judge": self.temperature_judge,
+        }.get(role)

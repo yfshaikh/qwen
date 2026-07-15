@@ -60,6 +60,47 @@ class Extraction:
     relations: list[ExtractedRelation] = field(default_factory=list)
 
 
+# Evidence kinds are the ONLY thing that moves the learner model: the Keeper maps
+# kind -> mastery observation via core/mastery.py KIND_OBSERVATION, and four of the
+# seven kinds carry a signal while three are inert.
+#
+# This guide exists because an earlier prompt passed `sorted(_VALID_KINDS)` as a
+# bare alphabetical enum with no definitions. Measured on eval run a2b4c404 (frozen
+# transcript, 3 sessions containing an explicit wrong answer that the tutor
+# explicitly corrected): the extractor emitted ZERO quiz_wrong, reached for the
+# three inert kinds throughout, and every mastery on the graph's misconception
+# concept stayed None. Contradiction detection is built and correct — it had simply
+# never been fed. Never reduce this back to a bare enum.
+_KIND_GUIDE = (
+    "EVIDENCE KIND — this is the most important field you emit. It is the only "
+    "thing that updates what the learner knows. Pick the most specific one:\n"
+    "  quiz_wrong   = the learner answered incorrectly, OR stated a belief the "
+    "tutor corrected. USE THIS FOR MISCONCEPTIONS — a wrong belief the learner "
+    "holds is the single most valuable thing to record.\n"
+    "  quiz_correct = the learner answered a question correctly.\n"
+    "  demonstrated = the learner correctly explained or applied the concept "
+    "without being asked.\n"
+    "  struggle     = the learner expressed confusion, uncertainty, or difficulty.\n"
+    "  asked_about  = the learner asked about it. Carries NO mastery signal.\n"
+    "  explained    = the tutor explained it. Carries NO mastery signal.\n"
+    "  note         = anything else. Carries NO mastery signal.\n"
+    "The first four move mastery; the last three are inert. If the learner was "
+    "assessed and you choose an inert kind, that assessment is silently lost.\n"
+)
+
+# The attribution rule. Same run: the learner correctly explained a concept while
+# naming two others in the sentence, and the extractor credited the two named
+# concepts (mastery 0.9 each) while the concept actually being assessed got a bare
+# `explained` and stayed at mastery=None. The concepts were right; the evidence
+# landed on the wrong ones.
+_ATTRIBUTION = (
+    "ATTRIBUTION: attach assessment evidence (quiz_wrong, quiz_correct, "
+    "demonstrated, struggle) to the concept BEING ASSESSED — not to every concept "
+    "the sentence happens to mention. If a learner is asked about concept X and "
+    "answers using the words Y and Z, the evidence belongs on X. Y and Z get "
+    "`note` or nothing.\n"
+)
+
 _SYSTEM = (
     "You extract a learner's knowledge graph from learning events. "
     "Return ONLY JSON with keys: concepts, preferences, goals (each a list of "
@@ -67,12 +108,17 @@ _SYSTEM = (
     "and relations (a list of {source_label, target_label, type}). "
     "importance is 0-1: 1.0 = central to the learner's goal or repeatedly discussed, "
     "0.7 = actively being studied, 0.4 = supporting detail, 0.1 = passing mention. "
-    f"Evidence kind must be one of {sorted(_VALID_KINDS)}. "
+    + _KIND_GUIDE
+    + _ATTRIBUTION
+    + f"Evidence kind must be one of {sorted(_VALID_KINDS)}. "
     f"Relation type must be one of {sorted(_VALID_REL_TYPES)}. "
     "If an event's signals contain correct/mastery, copy them onto the evidence. "
     "Extract preferences and goals ONLY from the learner's own words; never "
-    "from tutor_explanation text. "
-    "Do not invent node types beyond concept/preference/goal."
+    "from tutor_explanation text. A preference must be DURABLE — something the "
+    "learner states as a standing preference, not a one-off request in the moment. "
+    "Do not invent node types beyond concept/preference/goal. "
+    "A concept is a topic the learner is learning. Do not emit a concept for an "
+    "incidental noun or phrase that merely appeared in the conversation."
 )
 
 

@@ -97,3 +97,132 @@ def test_load_scenario_reads_aliases(tmp_path):
         "aliases:\n  Foo: [F, Foobar]\n")
     sc = load_scenario(str(p))
     assert sc.aliases == {"Foo": ["F", "Foobar"]}
+
+
+# --- frozen transcripts -----------------------------------------------------
+# A frozen session replays verbatim text instead of improvising from an intent,
+# so the extractor is the only LLM that varies and a graph diff is attributable.
+
+FROZEN = BASE + """
+sessions:
+  - transcript:
+      - {role: user, content: "what is flux?"}
+      - {role: assistant, content: "- Phi = B.A.cos(theta)"}
+  - gap_days: 10
+    transcript:
+      - {role: user, content: "and Faraday's law?"}
+      - {role: assistant, content: "- eps = -dPhi/dt"}
+"""
+
+def test_frozen_transcript_loads_and_derives_turns(tmp_path):
+    sc = load_scenario(_write(tmp_path, FROZEN))
+    assert sc.frozen is True
+    assert [s.turns for s in sc.sessions] == [1, 1]        # turns derived from pairs
+    assert sc.sessions[1].gap_days == 10.0
+    assert sc.sessions[0].transcript[0]["content"] == "what is flux?"
+    assert sc.sessions[0].frozen and not sc.sessions[0].intent
+
+def test_generated_scenario_is_not_frozen(tmp_path):
+    sc = load_scenario(_write(tmp_path, BASE + "sessions: [{intent: a}]\n"))
+    assert sc.frozen is False and sc.sessions[0].frozen is False
+
+def test_session_needs_exactly_one_of_intent_or_transcript(tmp_path):
+    both = BASE + ("sessions:\n  - intent: a\n    transcript:\n"
+                   "      - {role: user, content: hi}\n"
+                   "      - {role: assistant, content: yo}\n")
+    with pytest.raises(ValueError, match="exactly one of"):
+        load_scenario(_write(tmp_path, both))
+    with pytest.raises(ValueError, match="exactly one of"):
+        load_scenario(_write(tmp_path, BASE + "sessions: [{turns: 2}]\n"))
+
+def test_mixed_frozen_and_generated_rejected(tmp_path):
+    """Half-replayed is neither reproducible nor realistic — refuse rather than
+    produce a number nobody can interpret."""
+    mixed = BASE + ("sessions:\n  - intent: a\n  - transcript:\n"
+                    "      - {role: user, content: hi}\n"
+                    "      - {role: assistant, content: yo}\n")
+    with pytest.raises(ValueError, match="mixes frozen and generated"):
+        load_scenario(_write(tmp_path, mixed))
+
+@pytest.mark.parametrize("bad,match", [
+    ("      - {role: user, content: hi}\n", "must be even"),
+    ("      - {role: assistant, content: yo}\n      - {role: user, content: hi}\n",
+     "must alternate"),
+    ("      - {role: robot, content: hi}\n      - {role: assistant, content: yo}\n",
+     "role must be one of"),
+    ("      - {role: user, content: ''}\n      - {role: assistant, content: yo}\n",
+     "empty content"),
+])
+def test_malformed_transcript_rejected(tmp_path, bad, match):
+    """Strict on purpose: replay ingests each exchange as an (utterance,
+    tutor_explanation) pair, so a dangling or misordered turn would silently drop
+    events and quietly change what the run measures."""
+    with pytest.raises(ValueError, match=match):
+        load_scenario(_write(tmp_path, BASE + "sessions:\n  - transcript:\n" + bad))
+
+
+# --- expect block + alias bridge --------------------------------------------
+
+def test_expect_block_and_alias_bridge(tmp_path):
+    """expect.concepts[].aliases is the single source of truth, but recall_probes
+    and lifecycle read the flat scenario.aliases map. One edit site, both work."""
+    p = _write(tmp_path, BASE + """
+sessions: [{intent: a}]
+aliases:
+  Foo: [explicit-wins]
+expect:
+  concepts:
+    - label: Foo
+      aliases: [should-lose]
+    - label: Bar
+      aliases: [B, Barr]
+  no_duplicates: true
+  edges:
+    required: [[Bar, Foo, prerequisite]]
+""")
+    sc = load_scenario(p)
+    assert sc.expect["no_duplicates"] is True
+    assert sc.expect["edges"]["required"] == [["Bar", "Foo", "prerequisite"]]
+    assert sc.aliases["Bar"] == ["B", "Barr"]        # bridged from expect
+    assert sc.aliases["Foo"] == ["explicit-wins"]    # top-level overrides
+
+def test_expect_defaults_to_empty(tmp_path):
+    sc = load_scenario(_write(tmp_path, BASE + "sessions: [{intent: a}]\n"))
+    assert sc.expect == {}
+
+
+@pytest.fixture
+def _registered():
+    """Re-register the checks. Mirrors test_checks_graph.py / test_runner.py:
+    test_registry's autouse clear_registry() can empty the registry first, and
+    import caching means @check won't re-fire on a plain import."""
+    import importlib
+
+    from engram.eval.registry import clear_registry
+    clear_registry()
+    for name in ("recall_probes", "integrity", "edges", "abstention",
+                 "knowledge_update", "concepts", "preferences", "dedup",
+                 "importance", "lifecycle", "behavior"):
+        importlib.reload(importlib.import_module(f"engram.eval.checks.{name}"))
+
+
+def test_shipped_frozen_fixture_stays_loadable(_registered):
+    """The committed benchmark is the gate an agent iterates against. If it stops
+    loading, or names a check nobody registered, every downstream run is
+    meaningless — and it would surface as a run `error`, which is easy to skim
+    past. Fail here instead, in the fast suite.
+    """
+    import pathlib
+
+    from engram.eval.registry import get_check
+
+    root = pathlib.Path(__file__).resolve().parents[2]
+    sc = load_scenario(root / "eval" / "scenarios" / "em-frozen-v1.yaml")
+    assert sc.frozen, "em-frozen-v1 must be fully frozen or it isn't a gate"
+    for c in sc.checks:
+        get_check(c.name)  # raises KeyError if unregistered
+    # Ground truth the checks read; an empty block means they'd vacuously pass —
+    # a gate that cannot fail is worse than no gate, because it reads as verified.
+    assert sc.expect["concepts"] and sc.expect["edges"]["required"]
+    assert sc.expect["edges"]["forbidden"] and sc.expect["abstention"]
+    assert sc.expect["mastery"]

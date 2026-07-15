@@ -43,7 +43,7 @@ class _FakeClient:
         self.chat = _FakeChat(recorder)
 
 
-def _make(recorder):
+def _make(recorder, role_to_temperature=None):
     return OpenAICompatibleLLM(
         client=_FakeClient(recorder),
         role_to_model={
@@ -51,7 +51,30 @@ def _make(recorder):
             "extractor": "qwen/extract-model",
             "reflector": "qwen/reflector-model",
         },
+        role_to_temperature=role_to_temperature,
     )
+
+
+async def test_complete_omits_temperature_when_unconfigured():
+    """Omitted != 0.0 and != 1.0 — providers differ on their default, so an
+    unconfigured role must take the provider's, not one we guessed."""
+    rec = {}
+    await _make(rec).complete("tutor", [Message(role="user", content="q")])
+    assert "temperature" not in rec["kwargs"]
+
+
+async def test_complete_sets_temperature_per_role():
+    """The seam that lets a frozen-transcript eval pin the extractor to 0 without
+    touching the production tutor — the reason docs/eval-harness.md #1 deferred
+    pinning temperature at all."""
+    rec = {}
+    llm = _make(rec, {"extractor": 0.0})
+    await llm.complete("extractor", [Message(role="user", content="q")])
+    assert rec["kwargs"]["temperature"] == 0.0
+    await llm.complete("tutor", [Message(role="user", content="q")])
+    assert "temperature" not in rec["kwargs"]  # tutor untouched
+
+
 
 
 async def test_complete_resolves_role_to_model_and_passes_messages():
@@ -157,3 +180,14 @@ async def test_stream_yields_text_deltas_and_skips_empty():
     assert out == ["A ", "limit ", "is..."]  # None delta skipped
     assert rec["kwargs"]["stream"] is True
     assert rec["kwargs"]["model"] == "qwen/tutor-model"
+    assert "temperature" not in rec["kwargs"]  # unconfigured -> provider default
+
+
+async def test_stream_sets_temperature_per_role():
+    rec = {}
+    llm = OpenAICompatibleLLM(
+        client=_StreamClient(rec), role_to_model={"tutor": "qwen/tutor-model"},
+        role_to_temperature={"tutor": 0.0},
+    )
+    [d async for d in llm.stream("tutor", [Message(role="user", content="q")])]
+    assert rec["kwargs"]["temperature"] == 0.0 and rec["kwargs"]["stream"] is True

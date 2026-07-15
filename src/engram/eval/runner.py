@@ -105,6 +105,19 @@ async def execute_run(
     if max_cost_usd is not None and pin == 0.0 and pout == 0.0:
         emit({"type": "error",
               "message": "budget cap set but ENGRAM_EVAL_PRICE_* unconfigured; cap cannot trip"})
+    # A frozen transcript pins the input, which leaves SAMPLING as the only source
+    # of run-to-run variance. Unpinned, the fixture still runs but is not a gate —
+    # and silently reporting a number nobody can reproduce is how a coin flip gets
+    # mistaken for a verified fix. Same shape as the budget-cap warning above.
+    if scenario.frozen:
+        temp_for = getattr(s, "temperature_for", None)
+        unpinned = [r for r in ("extractor", "reflector")
+                    if temp_for is None or temp_for(r) is None]
+        if unpinned:
+            emit({"type": "error",
+                  "message": f"frozen transcript but {'/'.join(unpinned)} temperature "
+                             f"unpinned (ENGRAM_TEMPERATURE_{unpinned[0].upper()}=0); run is "
+                             "not reproducible and must not be used as a gate"})
 
     snapshots: list[dict] = []
     transcript: list[dict] = []
@@ -116,20 +129,35 @@ async def execute_run(
         for si, session in enumerate(scenario.sessions):
             if session.gap_days and clock is not None:
                 clock.advance(days=session.gap_days)
-            emit({"type": "session", "n": si, "gap_days": session.gap_days})
-            for _ in range(session.turns):
-                lines = "\n".join(f"{h['role']}: {h['content']}" for h in history)
-                out = await metered.complete("student",
-                                             student_prompt(scenario, session.intent, lines))
-                user = (out.text or "").strip()
-                history.append({"role": "user", "content": user})
-                transcript.append({"role": "user", "content": user, "session": si})
-                emit({"type": "turn", "role": "user", "session": si})
-                context = (await run_eng.recall(learner_id, user, None)).text_block
-                reply = await _tutor_reply(run_eng, context, history)
-                history.append({"role": "assistant", "content": reply})
-                transcript.append({"role": "assistant", "content": reply, "session": si})
-                emit({"type": "turn", "role": "assistant", "session": si})
+            emit({"type": "session", "n": si, "gap_days": session.gap_days,
+                  "frozen": session.frozen})
+            for turn_i in range(session.turns):
+                if session.frozen:
+                    # Replay. No student call, no tutor call, no recall — the reply
+                    # is fixed text, so recall's output would be computed and
+                    # discarded. Recall is exercised by `recall_probes` instead.
+                    assert session.transcript is not None  # guaranteed by .frozen
+                    user = session.transcript[turn_i * 2]["content"]
+                    reply = session.transcript[turn_i * 2 + 1]["content"]
+                    history.append({"role": "user", "content": user})
+                    transcript.append({"role": "user", "content": user, "session": si})
+                    emit({"type": "turn", "role": "user", "session": si})
+                    history.append({"role": "assistant", "content": reply})
+                    transcript.append({"role": "assistant", "content": reply, "session": si})
+                    emit({"type": "turn", "role": "assistant", "session": si})
+                else:
+                    lines = "\n".join(f"{h['role']}: {h['content']}" for h in history)
+                    out = await metered.complete("student",
+                                                 student_prompt(scenario, session.intent, lines))
+                    user = (out.text or "").strip()
+                    history.append({"role": "user", "content": user})
+                    transcript.append({"role": "user", "content": user, "session": si})
+                    emit({"type": "turn", "role": "user", "session": si})
+                    context = (await run_eng.recall(learner_id, user, None)).text_block
+                    reply = await _tutor_reply(run_eng, context, history)
+                    history.append({"role": "assistant", "content": reply})
+                    transcript.append({"role": "assistant", "content": reply, "session": si})
+                    emit({"type": "turn", "role": "assistant", "session": si})
                 await run_eng.ingest([
                     LearningEvent(learner_id=learner_id, type="utterance", text=user),
                     LearningEvent(learner_id=learner_id, type="tutor_explanation", text=reply),
