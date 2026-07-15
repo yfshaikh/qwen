@@ -268,6 +268,31 @@ expect:
   # induction" must resolve to ONE node (expect.no_duplicates) — that is the
   # near-duplicate bait, and it is the point.
   #
+  # ⚠️ KNOWN TENSION: `concepts.required` vs `no_duplicates`.
+  # Both independent physics derivations (2026-07-15) flagged that this concept
+  # set is not cleanly distinct:
+  #   - "Electromagnetic induction" and "Faraday's law" substantially overlap —
+  #     many textbooks title the chapter "Faraday's Law of Induction". One
+  #     derivation: they may be ONE concept split in two, and if you reject the
+  #     bare-phenomenon reading, induction should merge INTO Faraday.
+  #   - "Lenz's law" and "Faraday's law" are the least distinct pair in the set —
+  #     Lenz is not a separate law, it IS the sign of Faraday's.
+  # So a GOOD deduper might legitimately merge pairs this file requires to be
+  # distinct, failing `concepts.required`; while keeping them distinct might trip
+  # `no_duplicates` on cosine. The benchmark can contradict itself here.
+  # This transcript deliberately introduces them in separate sessions (s0 = what
+  # induction is; s1 = Faraday's law) to make the split defensible — but if
+  # calibration shows the extractor merging them, THAT IS NOT NECESSARILY A BUG.
+  # Resolve it with evidence from the calibration run, not by assertion.
+  #
+  # Also flagged and deliberately NOT added: an `EMF` node. One derivation argues
+  # it's the missing intermediate that separates Faraday's law from Ohm's law, and
+  # this transcript mentions EMF constantly — so the extractor will very likely
+  # mint it. It is not in `required` because the lesson of the edge cross-check is:
+  # DO NOT ASSERT WHAT YOU HAVEN'T VERIFIED. Add it after calibration if it shows
+  # up. Same for `Mutual inductance` (flagged as the missing step between
+  # Faraday's law and Transformer).
+  #
   # calibrated_from: null   # ← set to a run id once step 5 is done
   concepts:
     - label: Ohm's law
@@ -284,29 +309,97 @@ expect:
       aliases: [Transformers]
 
   # -- Prerequisite structure (the authored ground truth) -------------------
-  # Read "A → B" as: you need A to understand B.
-  # Deliberately conservative — only edges defensible to a physicist. Extra edges
-  # the extractor invents are NOT failed here (that would be too strict for now);
-  # only missing edges and reversals are.
+  #
+  # Read "A → B" as: A is a prerequisite of B — B cannot be correctly stated or
+  # understood without A. NOT "A is usually taught first" and NOT "A relates to B".
+  #
+  # ── PROVENANCE ──────────────────────────────────────────────────────────────
+  # Cross-checked 2026-07-15 by two independent derivations that were NOT shown
+  # the draft edges (to avoid anchoring). Of the four originally authored, only
+  # ONE survived unanimously. Kept edges require BOTH derivations to agree.
+  # Anything either one contested is documented below but NOT asserted.
+  #
+  # This block is deliberately tiny. A benchmark with two correct edges is worth
+  # more than one with four where two are wrong — a wrong edge here doesn't just
+  # fail to catch the bug, it actively trains the fix toward reproducing the
+  # error. Grow this list only with evidence, never to "get more coverage".
+  #
+  # Extra edges the extractor invents are NOT failed (too strict for now); only
+  # missing `required` and present `forbidden` are.
   edges:
     required:
-      # Faraday's law IS ε = −dΦ/dt. Cannot be stated without flux.
+      # UNANIMOUS. Faraday's law IS ε = −dΦ/dt — the quantity being differentiated
+      # is flux, so no statement of the law survives removing the concept.
       - [Magnetic flux, Faraday's law, prerequisite]
-      # Induction is the phenomenon of flux change producing EMF.
-      - [Magnetic flux, Electromagnetic induction, prerequisite]
-      # Lenz's law explains the minus sign IN Faraday's law.
-      - [Faraday's law, Lenz's law, prerequisite]
-      # A transformer is an application of induction.
-      - [Electromagnetic induction, Transformer, prerequisite]
 
-    # Reversals of the above. Catches direction churn (keeper.py:191 adopts the
-    # proposal's direction on upgrade, so a later wrong proposal can silently flip
-    # a settled edge). Any of these present = FAIL.
+      # UNANIMOUS. Vs/Vp = Ns/Np is Faraday applied twice to a shared core flux,
+      # then divided. The turns ratio IS that division. And "why no DC
+      # transformer" is unstatable except as dΦ/dt = 0 ⟹ EMF = 0.
+      - [Faraday's law, Transformer, prerequisite]
+
+    # Reversals of the required edges ONLY. Catches direction churn — keeper.py:191
+    # adopts the proposal's direction on upgrade, so a later wrong proposal can
+    # silently flip a settled edge. Any of these present = FAIL.
+    #
+    # ⚠️ Do NOT add a reversal here unless its forward edge is in `required` and
+    # unanimous. An earlier draft listed [Lenz's law, Faraday's law] as forbidden;
+    # one derivation argued that direction is MORE defensible than the forward one.
+    # That would have failed a CORRECT extraction and driven a fix-loop to break
+    # working code. Forbidding a contested direction is worse than forbidding
+    # nothing.
     forbidden:
+      # Φ = ∫B·dA is a static surface integral — well-defined with zero induction
+      # anywhere in the problem. Flux needs B and a surface; not time, EMF, or a
+      # circuit.
       - [Faraday's law, Magnetic flux, prerequisite]
-      - [Electromagnetic induction, Magnetic flux, prerequisite]
-      - [Lenz's law, Faraday's law, prerequisite]
-      - [Transformer, Electromagnetic induction, prerequisite]
+      # The transformer is the canonical classroom demo of Faraday's law, which
+      # makes this reversal tempting. Being the best illustration of a law is not
+      # being a prerequisite of it: Faraday's law is stated over an arbitrary
+      # surface with no reference to any device, core, or winding.
+      - [Transformer, Faraday's law, prerequisite]
+
+    # ── CONTESTED — deliberately NOT asserted in either direction ──────────────
+    # Documented so nobody "helpfully" adds them later. Each was rejected by at
+    # least one independent derivation. If the extractor emits any of these, that
+    # is NOT a failure — it's a defensible reading.
+    #
+    #   Lenz's law ↔ Faraday's law
+    #     THE fault line. Lenz's law is not a separate law — it IS the minus sign
+    #     in Faraday's. Griffiths: the sign is bookkeeping that falls out of
+    #     Maxwell once orientation is fixed, so Lenz is a downstream mnemonic.
+    #     Halliday: Lenz is an independent energy-conservation principle that
+    #     EXPLAINS why the sign is negative, so it's a lateral constraint. "A
+    #     framework choice, not a fact about nature." Any edge here encodes a
+    #     textbook's stance. Note |ε| = |dΦ/dt| is fully statable with zero Lenz
+    #     content, which is why Faraday → Lenz fails the strict bar. The real
+    #     relation is part_of, not prerequisite.
+    #
+    #   Magnetic flux → Electromagnetic induction
+    #     Split. One: the only correct GENERAL statement of induction is "changing
+    #     flux induces EMF" — the flux-free version fails for a stationary coil in
+    #     a growing solenoid field. Two: induction is the bare empirical phenomenon
+    #     ("move a magnet, the galvanometer deflects") and is statable
+    #     pre-quantitatively — Faraday had the phenomenon in 1831 before the law.
+    #     Turns on what "electromagnetic induction" denotes.
+    #
+    #   Electromagnetic induction → Faraday's law
+    #     Asserted by one derivation (the law's own statement contains "induced",
+    #     so the referent must precede the quantity). The other treats it as
+    #     part_of (induction is the phenomenon; Faraday's law is it, stated
+    #     precisely) and warns the pair may be one concept split in two.
+    #
+    #   Ohm's law → anything
+    #     BOTH derivations: Ohm's law is ISOLATED in this concept set, and both
+    #     volunteered it unprompted. It's a constitutive relation about conduction
+    #     in matter (J = σE) — Faraday's law is a field law that holds in vacuum
+    #     where Ohm's is vacuous. Faraday delivers an EMF, not a current; Ohm is a
+    #     separate claim invoked afterwards. The near-miss: Lenz is usually phrased
+    #     "the induced CURRENT opposes…", and current-from-EMF is Ohm. But that's
+    #     phrasing — Lenz holds in an open circuit and in a superconducting loop,
+    #     where Ohm's law is respectively inapplicable and degenerate. This is
+    #     load-bearing for THIS transcript: session 2's correction turns on exactly
+    #     that superconducting-loop argument.
+    #     If Ohm's law shows up isolated in the graph, that is CORRECT, not a bug.
 
   # -- Mastery arcs ---------------------------------------------------------
   mastery:
