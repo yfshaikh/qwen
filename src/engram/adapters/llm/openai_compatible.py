@@ -19,6 +19,28 @@ class _AsyncChatClient(Protocol):
     def chat(self) -> Any: ...
 
 
+def _failed_generation(exc: BaseException) -> str | None:
+    """Groq's json_object mode validates server-side: if the model emits invalid
+    JSON it raises 400 `json_validate_failed` carrying the partial text, where
+    OpenAI would just return that text. Return the partial, or None if `exc` is
+    some other error.
+
+    Without this the provider's 400 escapes `complete()` and kills the whole run —
+    bypassing the repair prompt in Keeper._extract, which exists precisely to
+    re-ask when the extractor returns unusable JSON. Malformed output is the
+    extractor having a bad day, not an outage. Observed on gpt-oss-120b: one run
+    truncated mid-string, another returned an empty completion.
+    """
+    body = getattr(exc, "body", None)
+    err = body.get("error") if isinstance(body, dict) else None
+    if not isinstance(err, dict) or err.get("code") != "json_validate_failed":
+        return None
+    # "" is a real answer here (the empty-completion case) — it must reach the
+    # parser and raise ExtractionError, so don't collapse it to None.
+    got = err.get("failed_generation")
+    return got if isinstance(got, str) else ""
+
+
 class OpenAICompatibleLLM:
     """Implements core.ports.LLMPort against any OpenAI-compatible chat API."""
 
@@ -66,7 +88,13 @@ class OpenAICompatibleLLM:
             # (Phase C) is what would move that number.
             kwargs["max_tokens"] = 4
 
-        resp = await self._client.chat.completions.create(**kwargs)
+        try:
+            resp = await self._client.chat.completions.create(**kwargs)
+        except Exception as exc:
+            partial = _failed_generation(exc)
+            if partial is None:
+                raise
+            return Completion(text=partial, usage={}, model=model)
         text = resp.choices[0].message.content if resp.choices else None
         usage = self._usage_dict(getattr(resp, "usage", None))
         return Completion(text=text, usage=usage, model=getattr(resp, "model", model))
