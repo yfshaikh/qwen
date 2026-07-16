@@ -206,9 +206,10 @@ def _registered():
         importlib.reload(importlib.import_module(f"engram.eval.checks.{name}"))
 
 
-def test_shipped_frozen_fixture_stays_loadable(_registered):
-    """The committed benchmark is the gate an agent iterates against. If it stops
-    loading, or names a check nobody registered, every downstream run is
+@pytest.mark.parametrize("name", ["em-frozen-v1", "sat-linear-holdout-v1"])
+def test_shipped_frozen_fixture_stays_loadable(_registered, name):
+    """The committed benchmarks are the gates an agent iterates against. If one
+    stops loading, or names a check nobody registered, every downstream run is
     meaningless — and it would surface as a run `error`, which is easy to skim
     past. Fail here instead, in the fast suite.
     """
@@ -217,8 +218,8 @@ def test_shipped_frozen_fixture_stays_loadable(_registered):
     from engram.eval.registry import get_check
 
     root = pathlib.Path(__file__).resolve().parents[2]
-    sc = load_scenario(root / "eval" / "scenarios" / "em-frozen-v1.yaml")
-    assert sc.frozen, "em-frozen-v1 must be fully frozen or it isn't a gate"
+    sc = load_scenario(root / "eval" / "scenarios" / f"{name}.yaml")
+    assert sc.frozen, f"{name} must be fully frozen or it isn't a gate"
     for c in sc.checks:
         get_check(c.name)  # raises KeyError if unregistered
     # Ground truth the checks read; an empty block means they'd vacuously pass —
@@ -226,3 +227,20 @@ def test_shipped_frozen_fixture_stays_loadable(_registered):
     assert sc.expect["concepts"] and sc.expect["edges"]["required"]
     assert sc.expect["edges"]["forbidden"] and sc.expect["abstention"]
     assert sc.expect["mastery"]
+
+
+@pytest.mark.parametrize("name", ["em-frozen-v1", "sat-linear-holdout-v1"])
+def test_abstention_targets_never_appear_in_transcript(_registered, name):
+    """`abstention` asserts the extractor invented a topic from its own weights. If
+    the topic is sitting in the transcript, the check scores recall instead — it
+    goes red on a CORRECT extraction and the fixture silently tests the opposite of
+    what it claims. Cheap to get wrong while editing a transcript; invisible until
+    you are debugging a fix that was never broken.
+    """
+    import pathlib
+
+    root = pathlib.Path(__file__).resolve().parents[2]
+    sc = load_scenario(root / "eval" / "scenarios" / f"{name}.yaml")
+    text = " ".join(t["content"] for s in sc.sessions for t in s.transcript).lower()
+    leaked = [t for t in sc.expect.get("abstention", []) if str(t).lower() in text]
+    assert not leaked, f"{name}: abstention targets appear in the transcript: {leaked}"

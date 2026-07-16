@@ -27,11 +27,16 @@ import hashlib
 import pathlib
 
 ROOT = pathlib.Path(__file__).resolve().parents[2]
-FIXTURE = ROOT / "eval" / "scenarios" / "em-frozen-v1.yaml"
+SCENARIOS = ROOT / "eval" / "scenarios"
+# Both frozen benchmarks. The holdout is covered for the same reason as the main
+# fixture, and more so: it is the only thing that can tell "Engram improved" from
+# "Engram memorised em-frozen-v1", and it is the one file whose edits nobody would
+# be watching for.
+FIXTURES = [SCENARIOS / "em-frozen-v1.yaml", SCENARIOS / "sat-linear-holdout-v1.yaml"]
 CHECKS = ROOT / "src" / "engram" / "eval" / "checks"
 
 # Update ONLY when changing ground truth on purpose. See module docstring.
-PINNED = "a1724e43cb9b4bf9239fb236488cc9a62a92bf7c8fd77462fede2e81b3597188"
+PINNED = "a8efb2a6112727f904f44d7937147349c371eaab02347413c7afccddfb0d9c08"
 
 
 def _digest() -> tuple[str, list[str]]:
@@ -42,7 +47,7 @@ def _digest() -> tuple[str, list[str]]:
     """
     h = hashlib.sha256()
     covered: list[str] = []
-    for p in [FIXTURE] + sorted(CHECKS.glob("*.py")):
+    for p in FIXTURES + sorted(CHECKS.glob("*.py")):
         rel = str(p.relative_to(ROOT))
         covered.append(rel)
         h.update(rel.encode())
