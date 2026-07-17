@@ -104,17 +104,19 @@ _ATTRIBUTION = (
     "`note` or nothing.\n"
 )
 
+# NOTE: relations are deliberately NOT requested here. One call was doing five
+# jobs (concepts, summaries, importance, evidence, relations) and did the last
+# badly — roadmap §3.1 fix #2 / Graphiti's split pipeline. Edge inference is a
+# separate pass (_EDGE_SYSTEM below) that runs AFTER entities are resolved.
 _SYSTEM = (
     "You extract a learner's knowledge graph from learning events. "
     "Return ONLY JSON with keys: concepts, preferences, goals (each a list of "
-    '{label, summary, importance, evidence:[{kind, content, importance, correct?, mastery?}]}) '
-    "and relations (a list of {source_label, target_label, type}). "
+    '{label, summary, importance, evidence:[{kind, content, importance, correct?, mastery?}]}). '
     "importance is 0-1: 1.0 = central to the learner's goal or repeatedly discussed, "
     "0.7 = actively being studied, 0.4 = supporting detail, 0.1 = passing mention. "
     + _KIND_GUIDE
     + _ATTRIBUTION
     + f"Evidence kind must be one of {sorted(_VALID_KINDS)}. "
-    f"Relation type must be one of {sorted(_VALID_REL_TYPES)}. "
     "If an event's signals contain correct/mastery, copy them onto the evidence. "
     "Extract preferences and goals ONLY from the learner's own words; never "
     "from tutor_explanation text. A preference must be DURABLE — something the "
@@ -214,6 +216,86 @@ def build_extraction_messages(
         + "\n\nReturn the JSON described above."
     )
     return [Message(role="system", content=_SYSTEM_CLOSED), Message(role="user", content=user)]
+
+
+# The edge pass (roadmap §3.1 fix #2). Asked ONE clear question, with the
+# entities already resolved — Graphiti's split pipeline, minus the cost of a
+# call per edge. Dynamic mode only: an ontology's edges are authoritative and
+# closed mode never infers relations at all.
+_EDGE_SYSTEM = (
+    "You infer directed relations between concepts in a learner's knowledge "
+    "graph. You are given the concept list, the relations already recorded, "
+    "and the learning events just discussed.\n"
+    'Return ONLY JSON: {"relations": [{"source_label": "...", '
+    '"target_label": "...", "type": "..."}]}.\n'
+    "Types:\n"
+    "  prerequisite = the source concept must be understood BEFORE the target "
+    "can be learned. Direction matters — check it twice: 'A prerequisite B' "
+    "means A is learned first and B builds on it.\n"
+    "  part_of     = the source is a component or special case of the target.\n"
+    "  relates_to  = a meaningful association that is neither of the above. "
+    "Use sparingly; it is the weakest signal.\n"
+    "Rules: use labels EXACTLY as listed — never invent a concept. Do not "
+    "repeat a relation already recorded; if a recorded relation has the wrong "
+    "type or direction, you may propose the corrected one. Prefer relations "
+    "involving the concepts discussed in the events. Only emit relations you "
+    "are confident of; an empty list is a good answer."
+)
+
+
+def build_edge_messages(
+    concept_labels: list[str],
+    known_edges: list[tuple[str, str, str]],
+    events,
+) -> list[Message]:
+    """`known_edges` is [(source_label, type, target_label)] already in the
+    graph — shown so settled pairs are not re-litigated every consolidation
+    (re-litigation is what let directions churn)."""
+    lines = [json.dumps({"type": e.type, "text": e.text, "signals": e.signals})
+             for e in events]
+    known = ("\n".join(f"  {s} --{t}--> {d}" for s, t, d in known_edges)
+             or "  (none yet)")
+    user = (
+        "CONCEPTS:\n" + "\n".join(f"  {label}" for label in sorted(concept_labels))
+        + "\n\nRELATIONS ALREADY RECORDED:\n" + known
+        + "\n\nEvents:\n" + "\n".join(lines)
+        + "\n\nReturn the JSON described above."
+    )
+    return [Message(role="system", content=_EDGE_SYSTEM), Message(role="user", content=user)]
+
+
+def parse_edge_extraction(text: str, concept_labels: set[str]) -> list[ExtractedRelation]:
+    """Validate the edge pass's output. Labels must resolve to a listed concept
+    (exact, else normalized) — an edge can never mint a node. Returns relations
+    carrying the GRAPH's labels so the keeper's label->id lookup always hits."""
+    try:
+        data = json.loads(text)
+    except (ValueError, TypeError) as exc:
+        raise ExtractionError(f"invalid JSON: {exc}") from exc
+    if not isinstance(data, dict):
+        raise ExtractionError("top-level JSON is not an object")
+    rels = data.get("relations", [])
+    if not isinstance(rels, list):
+        raise ExtractionError("'relations' is not a list")
+
+    by_norm = {normalize_label(label): label for label in concept_labels}
+
+    def canon(raw) -> str | None:
+        if not isinstance(raw, str):
+            return None
+        if raw in concept_labels:
+            return raw
+        return by_norm.get(normalize_label(raw))
+
+    out: list[ExtractedRelation] = []
+    for r in rels:
+        if not isinstance(r, dict) or r.get("type") not in _VALID_REL_TYPES:
+            continue
+        s, t = canon(r.get("source_label")), canon(r.get("target_label"))
+        if s is None or t is None or s == t:
+            continue
+        out.append(ExtractedRelation(s, t, r["type"]))
+    return out
 
 
 def _as_float(v) -> float | None:

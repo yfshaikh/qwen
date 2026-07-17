@@ -153,6 +153,52 @@ def test_known_catalog_order_is_deterministic():
     assert a[1].content == b[1].content
 
 
+def test_open_system_no_longer_requests_relations():
+    msgs = build_extraction_messages([_ev("hi")])
+    assert "relations" not in msgs[0].content
+    assert "source_label" not in msgs[0].content
+
+
+def test_build_edge_messages_shape():
+    from engram.core.extraction import build_edge_messages
+    msgs = build_edge_messages(
+        ["Slope", "Linear equations"],
+        [("Slope", "part_of", "Linear equations")],
+        [_ev("what is slope?")],
+    )
+    u = msgs[1].content
+    assert "CONCEPTS:" in u and "  Linear equations" in u and "  Slope" in u
+    assert "Slope --part_of--> Linear equations" in u
+    assert "what is slope?" in u
+    empty = build_edge_messages(["A", "B"], [], [_ev("x")])
+    assert "(none yet)" in empty[1].content
+
+
+def test_parse_edge_extraction_validates_labels_and_types():
+    from engram.core.extraction import parse_edge_extraction
+    labels = {"Slope", "Linear equations"}
+    out = parse_edge_extraction(
+        '{"relations": ['
+        '{"source_label": "Slope", "target_label": "Linear equations", "type": "prerequisite"},'
+        '{"source_label": "slope", "target_label": "Linear equations", "type": "part_of"},'
+        '{"source_label": "Y-intercept", "target_label": "Slope", "type": "prerequisite"},'
+        '{"source_label": "Slope", "target_label": "Slope", "type": "relates_to"},'
+        '{"source_label": "Slope", "target_label": "Linear equations", "type": "causes"}]}',
+        labels)
+    assert [(r.source_label, r.target_label, r.type) for r in out] == [
+        ("Slope", "Linear equations", "prerequisite"),
+        ("Slope", "Linear equations", "part_of"),  # normalized 'slope' -> graph label
+    ]
+
+
+def test_parse_edge_extraction_raises_on_malformed():
+    from engram.core.extraction import parse_edge_extraction
+    with pytest.raises(ExtractionError):
+        parse_edge_extraction("not json", {"A"})
+    with pytest.raises(ExtractionError):
+        parse_edge_extraction('{"relations": "nope"}', {"A"})
+
+
 def test_closed_prompt_carries_catalog_and_forbids_relations():
     msgs = build_extraction_messages([_ev("what is slope?")], VOCAB)
     assert msgs[0].content is not _SYSTEM

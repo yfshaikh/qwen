@@ -22,8 +22,10 @@ from engram.core.extraction import (
     EXTRACTION_SCHEMA,
     Extraction,
     ExtractionError,
+    build_edge_messages,
     build_extraction_messages,
     filter_provenance,
+    parse_edge_extraction,
     parse_extraction,
 )
 from engram.core.mastery import decay_salience, ewma, observation_for, update_confidence
@@ -163,7 +165,23 @@ class Keeper:
             self._apply_evidence(cand, target_id, working_nodes, plan)
             working_nodes[target_id].touched = True
 
-        await self._reconcile_edges(learner_id, working_nodes, label_to_id, extraction.relations, plan)
+        real_ids = [nid for nid in working_nodes if not nid.startswith("tmp-")]
+        existing_edges = await self.storage.get_edges(learner_id, real_ids) if real_ids else []
+
+        # Edge inference is its own pass (§3.1 fix #2): entities are resolved
+        # above, so the edge call is asked one clear question over final labels.
+        # Closed mode never infers relations; the ontology's edges are law.
+        relations = extraction.relations
+        if not vocab:
+            relations = await self._extract_edges(events, working_nodes, existing_edges, plan)
+            # Edge-pass proposals carry graph labels (post-merge canonical), not
+            # candidate labels — make sure both resolve. Candidates win collisions.
+            for nid, w in working_nodes.items():
+                if w.node.type is NodeType.CONCEPT:
+                    label_to_id.setdefault(w.node.label, nid)
+
+        await self._reconcile_edges(learner_id, working_nodes, label_to_id,
+                                    relations, plan, existing_edges)
 
         self._decay_and_snapshot(working_nodes, now, plan)
         plan.audit.append(
@@ -172,14 +190,13 @@ class Keeper:
         return plan
 
     async def _reconcile_edges(self, learner_id: str, working_nodes: dict[str, _Work],
-                                label_to_id: dict[str, str], relations, plan: ConsolidationPlan) -> None:
+                                label_to_id: dict[str, str], relations, plan: ConsolidationPlan,
+                                existing_edges: list[Edge]) -> None:
         """Reconcile extracted relations against the existing graph: bump/upgrade
         edges that already exist, dedupe proposals within this batch, and queue
         brand-new edges. Mutates plan.new_edges (append, in relation order),
         plan.audit (append, upgrade entries), and plan.edge_updates (extended
         once at the end from the accumulated pending_updates)."""
-        real_ids = [nid for nid in working_nodes if not nid.startswith("tmp-")]
-        existing_edges = await self.storage.get_edges(learner_id, real_ids) if real_ids else []
         # Working copies — never mutate storage-owned Edge objects in place.
         by_pair: dict[frozenset, Edge] = {}
         for e in existing_edges:
@@ -236,6 +253,29 @@ class Keeper:
             ]
             out = await self.llm.complete("extractor", repair, schema=EXTRACTION_SCHEMA)
             return parse_extraction(out.text or "", vocabulary)  # may raise -> consolidate aborts
+
+    async def _extract_edges(self, events, working_nodes, existing_edges, plan) -> list:
+        """The dedicated edge pass. Degrades to no-relations on any failure —
+        edges are additive enrichment, and aborting a whole consolidation (with
+        its mastery evidence) because edge inference hiccuped would lose signal
+        worth far more than one cycle of edges."""
+        concepts = {nid: w.node.label for nid, w in working_nodes.items()
+                    if w.node.type is NodeType.CONCEPT}
+        if len(concepts) < 2:
+            return []
+        known = []
+        for e in existing_edges:
+            s, t = concepts.get(e.source_id), concepts.get(e.target_id)
+            if s and t:
+                known.append((s, e.type.value, t))
+        msgs = build_edge_messages(list(concepts.values()), known, events)
+        try:
+            out = await self.llm.complete("extractor", msgs, schema=EXTRACTION_SCHEMA)
+            return parse_edge_extraction(out.text or "", set(concepts.values()))
+        except Exception:  # noqa: BLE001 — see docstring
+            plan.audit.append(AuditEntry(
+                op="link", rationale="edge pass failed; no relations this cycle"))
+            return []
 
     async def _resolve(self, cand, vec, working_nodes, plan) -> str | None:
         """Return an existing node id to attach to, or None to create new.

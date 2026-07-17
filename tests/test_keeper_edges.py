@@ -1,4 +1,10 @@
-"""Edge dedup in the Keeper link step (spec 2 §6 / known issue #5)."""
+"""Edge dedup in the Keeper link step (spec 2 §6 / known issue #5).
+
+Relations now arrive via the dedicated edge pass (roadmap §3.1 fix #2): each
+consolidation makes a main extractor call (concepts) then an edge call, so
+_SeqLLM queues a [main, edge] pair per consolidation. `_extraction(relations)`
+builds that pair — the reconcile behavior under test is unchanged.
+"""
 import json
 
 from engram.core.engram import Engram
@@ -8,7 +14,8 @@ from tests.fakes import FakeEmbedder, FakeStorage
 
 class _SeqLLM:
     def __init__(self, extractions: list[str]) -> None:
-        self._q = list(extractions)
+        self._q = [text for pair in extractions for text in pair] \
+            if extractions and isinstance(extractions[0], tuple) else list(extractions)
 
     async def complete(self, role: str, messages: list[Message], schema=None) -> Completion:
         if role == "reflector":
@@ -16,16 +23,17 @@ class _SeqLLM:
         return Completion(text=self._q.pop(0))
 
 
-def _extraction(relations: list[dict]) -> str:
-    return json.dumps({
+def _extraction(relations: list[dict]) -> tuple[str, str]:
+    main = json.dumps({
         "concepts": [
             {"label": "Limitzz", "summary": "s",
              "evidence": [{"kind": "asked_about", "content": "q"}]},
             {"label": "Continuity", "summary": "s",
              "evidence": [{"kind": "asked_about", "content": "q"}]},
         ],
-        "preferences": [], "goals": [], "relations": relations,
+        "preferences": [], "goals": [],
     })
+    return main, json.dumps({"relations": relations})
 
 
 async def _consolidate(llm, storage, learner="L"):
@@ -107,6 +115,56 @@ async def test_same_batch_double_proposal_bumps_weight_once():
     assert len(edges) == 1
     assert abs(edges[0].weight - 0.6) < 1e-9  # +0.1 once, not twice
     assert stored.weight == 0.6  # apply wrote through; in-place planner mutation avoided
+
+
+class _RecordingSeqLLM(_SeqLLM):
+    def __init__(self, extractions):
+        super().__init__(extractions)
+        self.calls: list[list[Message]] = []
+
+    async def complete(self, role, messages, schema=None):
+        if role != "reflector":
+            self.calls.append(messages)
+        return await super().complete(role, messages, schema)
+
+
+async def test_edge_pass_sees_known_edges_and_final_labels():
+    storage = FakeStorage()
+    llm = _RecordingSeqLLM([
+        _extraction([{"source_label": "Limitzz", "target_label": "Continuity",
+                      "type": "prerequisite"}]),
+        _extraction([]),
+    ])
+    await _consolidate(llm, storage)
+    await _consolidate(llm, storage)
+    # 2 consolidations x (main + edge) = 4 non-reflector calls
+    assert len(llm.calls) == 4
+    second_edge_prompt = llm.calls[3][1].content
+    assert "RELATIONS ALREADY RECORDED" in second_edge_prompt
+    assert "Limitzz --prerequisite--> Continuity" in second_edge_prompt
+    assert "CONCEPTS:" in second_edge_prompt
+
+
+async def test_single_concept_skips_edge_pass():
+    storage = FakeStorage()
+    only = json.dumps({"concepts": [{"label": "Limitzz", "summary": "s",
+                                     "evidence": [{"kind": "asked_about", "content": "q"}]}],
+                       "preferences": [], "goals": []})
+    llm = _RecordingSeqLLM([only])  # queue holds ONE response; a 2nd call would pop-crash
+    report = await _consolidate(llm, storage)
+    assert report.nodes_created == 1
+    assert len(llm.calls) == 1
+
+
+async def test_edge_pass_failure_degrades_to_no_edges():
+    storage = FakeStorage()
+    main, _ = _extraction([])
+    llm = _SeqLLM([main, "NOT JSON {"])
+    report = await _consolidate(llm, storage)
+    assert report.nodes_created == 2  # consolidation itself survived
+    assert [e for e in storage.edges if e.learner_id == "L"] == []
+    ops = [a["rationale"] for a in await storage.get_audit("L")]
+    assert any("edge pass failed" in (r or "") for r in ops)
 
 
 async def test_weaker_proposal_does_not_downgrade():
