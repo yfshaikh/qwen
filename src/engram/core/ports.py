@@ -84,6 +84,9 @@ class StoragePort(Protocol):
         self, learner_id: str
     ) -> AbstractAsyncContextManager[bool]: ...
     async def apply_consolidation(self, plan: ConsolidationPlan) -> None: ...
+    async def apply_ontology(
+        self, learner_id: str, nodes: list[Node], edges: list[Edge]
+    ) -> dict: ...
     async def merge_nodes(
         self,
         learner_id: str,

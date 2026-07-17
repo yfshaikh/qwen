@@ -1,8 +1,11 @@
 import pytest
 
 from engram.core.extraction import (
+    _SYSTEM,
+    Extraction,
     ExtractionError,
     build_extraction_messages,
+    filter_provenance,
     parse_extraction,
 )
 from engram.core.models import LearningEvent
@@ -96,3 +99,77 @@ def test_parse_extraction_coerces_bad_importance_to_none():
         '{"concepts": [{"label": "Flux", "summary": "s", "importance": "high",'
         ' "evidence": []}], "preferences": [], "goals": [], "relations": []}')
     assert out.nodes[0].importance is None
+
+
+VOCAB = [("c1", "Slope"), ("c2", "Slope-intercept form")]
+
+
+def _ev(text, type="user_message", signals=None):
+    return LearningEvent(learner_id="alice", type=type, text=text, signals=signals or {})
+
+
+def test_open_mode_prompt_unchanged():
+    events = [_ev("what is slope?")]
+    a = build_extraction_messages(events)
+    b = build_extraction_messages(events, None)
+    c = build_extraction_messages(events, [])
+    assert a[0].content is _SYSTEM and b[0].content is _SYSTEM and c[0].content is _SYSTEM
+    assert a[1].content == b[1].content == c[1].content
+    assert a[1].content.startswith("Events:\n")
+    assert "CONCEPTS" not in a[1].content
+
+
+def test_closed_prompt_carries_catalog_and_forbids_relations():
+    msgs = build_extraction_messages([_ev("what is slope?")], VOCAB)
+    assert msgs[0].content is not _SYSTEM
+    assert "c1" in msgs[1].content and "Slope" in msgs[1].content
+    assert "Do NOT output a 'relations' key" in msgs[0].content
+
+
+def test_closed_parse_accepts_concept_id():
+    text = '{"concepts": [{"concept_id": "c1", "evidence": [{"kind": "quiz_correct"}]}]}'
+    ext = parse_extraction(text, VOCAB)
+    assert len(ext.nodes) == 1
+    assert ext.nodes[0].external_id == "c1" and ext.nodes[0].label == "Slope"
+
+
+def test_closed_parse_uses_ontology_label_not_model_echo():
+    text = '{"concepts": [{"concept_id": "c1", "label": "SLOPE"}]}'
+    ext = parse_extraction(text, VOCAB)
+    assert ext.nodes[0].label == "Slope"
+
+
+def test_closed_parse_falls_back_to_normalized_label():
+    text = '{"concepts": [{"label": "slope"}]}'
+    ext = parse_extraction(text, VOCAB)
+    assert ext.nodes[0].external_id == "c1"
+
+
+def test_closed_parse_drops_off_list_concept():
+    text = '{"concepts": [{"label": "factoring cubics"}]}'
+    ext = parse_extraction(text, VOCAB)
+    assert ext.nodes == []
+    assert any("factoring cubics" in d for d in ext.dropped)
+
+
+def test_closed_parse_ignores_relations():
+    text = ('{"concepts": [{"concept_id": "c1"}],'
+            ' "relations": [{"source_label": "Slope", "target_label": "Slope-intercept form",'
+            ' "type": "prerequisite"}]}')
+    ext = parse_extraction(text, VOCAB)
+    assert ext.relations == []
+
+
+def test_closed_parse_keeps_preferences_and_goals():
+    text = ('{"concepts": [], "preferences": [{"label": "bullet points"}],'
+            ' "goals": [{"label": "score 700"}]}')
+    ext = parse_extraction(text, VOCAB)
+    kinds = {n.type: n for n in ext.nodes}
+    assert "preference" in kinds and "goal" in kinds
+    assert kinds["preference"].external_id is None
+
+
+def test_filter_provenance_preserves_dropped():
+    ext = Extraction(nodes=[], relations=[], dropped=["factoring cubics"])
+    kept, _ = filter_provenance(ext, [_ev("hi")])
+    assert kept.dropped == ["factoring cubics"]

@@ -12,6 +12,7 @@ import json
 from dataclasses import dataclass, field
 
 from engram.core.models import EdgeType, EvidenceKind, Message, NodeType
+from engram.core.text import normalize_label
 
 # Passed to LLMPort.complete as `schema` to trigger json_object mode; the prompt
 # describes the shape for the model.
@@ -42,6 +43,7 @@ class ExtractedNode:
     summary: str | None
     importance: float | None = None
     evidence: list[ExtractedEvidence] = field(default_factory=list)
+    external_id: str | None = None
 
     def embed_text(self) -> str:
         return self.label + (f" {self.summary}" if self.summary else "")
@@ -58,6 +60,7 @@ class ExtractedRelation:
 class Extraction:
     nodes: list[ExtractedNode] = field(default_factory=list)
     relations: list[ExtractedRelation] = field(default_factory=list)
+    dropped: list[str] = field(default_factory=list)
 
 
 # Evidence kinds are the ONLY thing that moves the learner model: the Keeper maps
@@ -121,15 +124,66 @@ _SYSTEM = (
     "incidental noun or phrase that merely appeared in the conversation."
 )
 
+# Closed-vocabulary mode: used only when a learner has ontology-backed concepts
+# (host-supplied-ontology design, spec 2026-07-15 §6.5). NEVER edit _SYSTEM above
+# to add this behavior — it is the ontology=None path and is calibrated against
+# live runs. This is a SEPARATE prompt, reusing _KIND_GUIDE and _ATTRIBUTION
+# verbatim exactly as _SYSTEM does.
+_SYSTEM_CLOSED = (
+    "You extract a learner's knowledge graph from learning events. "
+    "The concepts are FIXED — a curriculum defines them and you may not add to "
+    "them. Your job on concepts is to decide which of the listed concepts each "
+    "event is evidence about, and what kind of evidence it is.\n"
+    "Return ONLY JSON with keys: concepts, preferences, goals.\n"
+    "  concepts: a list of {concept_id, importance, evidence:[{kind, content, "
+    "importance, correct?, mastery?}]}. concept_id MUST be copied exactly from "
+    "the CONCEPTS list below. If an event is not about any listed concept, omit "
+    "it — do NOT invent a concept, do NOT pick the closest one.\n"
+    "  preferences, goals: a list of {label, summary, importance, evidence:[...]}"
+    " — these are NOT in the curriculum, so write them yourself as before.\n"
+    "Do NOT output a 'relations' key. The curriculum already defines how "
+    "concepts relate; any relation you emit is ignored.\n"
+    "importance is 0-1: 1.0 = central to the learner's goal or repeatedly "
+    "discussed, 0.7 = actively being studied, 0.4 = supporting detail, 0.1 = "
+    "passing mention. "
+    + _KIND_GUIDE
+    + _ATTRIBUTION
+    + f"Evidence kind must be one of {sorted(_VALID_KINDS)}. "
+    "If an event's signals contain correct/mastery, copy them onto the evidence. "
+    "Extract preferences and goals ONLY from the learner's own words; never from "
+    "tutor_explanation text. A preference must be DURABLE — something the learner "
+    "states as a standing preference, not a one-off request in the moment."
+)
 
-def build_extraction_messages(events) -> list[Message]:
+
+def build_extraction_messages(
+    events, vocabulary: list[tuple[str, str]] | None = None
+) -> list[Message]:
+    """`vocabulary` is [(external_id, label)] — a learner's ontology-backed
+    concepts. Falsy (None or []) = today's open extraction, unchanged.
+
+    # ponytail: the vocabulary is dumped in full every consolidation. Marfini's
+    # ~40 concepts is ~350 tokens/call; a 500-concept course would be ~4k. If
+    # that ever bites, send only vector-nearest-k to the batch — but measure
+    # first, and note that a partial list can make a correct concept unpickable.
+    """
     lines = []
     for e in events:
         lines.append(
             json.dumps({"type": e.type, "text": e.text, "signals": e.signals})
         )
-    user = "Events:\n" + "\n".join(lines) + "\n\nReturn the JSON described above."
-    return [Message(role="system", content=_SYSTEM), Message(role="user", content=user)]
+    if not vocabulary:
+        user = "Events:\n" + "\n".join(lines) + "\n\nReturn the JSON described above."
+        return [Message(role="system", content=_SYSTEM), Message(role="user", content=user)]
+
+    catalog = "\n".join(f"  {ext_id}\t{label}" for ext_id, label in vocabulary)
+    user = (
+        "CONCEPTS (concept_id, then label — pick concept_id ONLY from this list):\n"
+        + catalog
+        + "\n\nEvents:\n" + "\n".join(lines)
+        + "\n\nReturn the JSON described above."
+    )
+    return [Message(role="system", content=_SYSTEM_CLOSED), Message(role="user", content=user)]
 
 
 def _as_float(v) -> float | None:
@@ -165,20 +219,12 @@ def _evidence(raw: dict) -> ExtractedEvidence | None:
     )
 
 
-def parse_extraction(text: str) -> Extraction:
-    try:
-        data = json.loads(text)
-    except (ValueError, TypeError) as exc:
-        raise ExtractionError(f"invalid JSON: {exc}") from exc
-    if not isinstance(data, dict):
-        raise ExtractionError("top-level JSON is not an object")
-
+def _pref_goal_nodes(data: dict) -> list[ExtractedNode]:
+    """Parse the 'preferences'/'goals' keys. Shared by open and closed mode —
+    preferences/goals are never in the curriculum, so both modes author them the
+    same label-based way."""
     nodes: list[ExtractedNode] = []
-    for key, node_type in (
-        ("concepts", "concept"),
-        ("preferences", "preference"),
-        ("goals", "goal"),
-    ):
+    for key, node_type in (("preferences", "preference"), ("goals", "goal")):
         items = data.get(key, [])
         if not isinstance(items, list):
             raise ExtractionError(f"{key!r} is not a list")
@@ -197,23 +243,100 @@ def parse_extraction(text: str) -> Extraction:
                     evidence=[e for e in evs if e is not None],
                 )
             )
+    return nodes
 
-    relations: list[ExtractedRelation] = []
-    rels = data.get("relations", [])
-    if not isinstance(rels, list):
-        raise ExtractionError("'relations' is not a list")
-    for r in rels:
-        if not isinstance(r, dict):
+
+def parse_extraction(
+    text: str, vocabulary: list[tuple[str, str]] | None = None
+) -> Extraction:
+    try:
+        data = json.loads(text)
+    except (ValueError, TypeError) as exc:
+        raise ExtractionError(f"invalid JSON: {exc}") from exc
+    if not isinstance(data, dict):
+        raise ExtractionError("top-level JSON is not an object")
+
+    if not vocabulary:
+        nodes: list[ExtractedNode] = []
+        for key, node_type in (
+            ("concepts", "concept"),
+            ("preferences", "preference"),
+            ("goals", "goal"),
+        ):
+            items = data.get(key, [])
+            if not isinstance(items, list):
+                raise ExtractionError(f"{key!r} is not a list")
+            for it in items:
+                if not isinstance(it, dict) or "label" not in it:
+                    continue
+                if node_type not in _VALID_NODE_TYPES:
+                    continue
+                evs = [_evidence(r) for r in it.get("evidence", []) if isinstance(r, dict)]
+                nodes.append(
+                    ExtractedNode(
+                        type=node_type,
+                        label=str(it["label"]),
+                        summary=it.get("summary"),
+                        importance=_as_float(it.get("importance")),
+                        evidence=[e for e in evs if e is not None],
+                    )
+                )
+
+        relations: list[ExtractedRelation] = []
+        rels = data.get("relations", [])
+        if not isinstance(rels, list):
+            raise ExtractionError("'relations' is not a list")
+        for r in rels:
+            if not isinstance(r, dict):
+                continue
+            if r.get("type") not in _VALID_REL_TYPES:
+                continue
+            if not r.get("source_label") or not r.get("target_label"):
+                continue
+            relations.append(
+                ExtractedRelation(r["source_label"], r["target_label"], r["type"])
+            )
+
+        return Extraction(nodes=nodes, relations=relations)
+
+    # Closed mode: classify into a fixed vocabulary, never invent, never infer
+    # relations. Matching is exact concept_id, else normalized-label equality —
+    # no cosine, no threshold, no fuzzy matching beyond that.
+    by_id = dict(vocabulary)
+    by_label = {normalize_label(label): ext_id for ext_id, label in vocabulary}
+
+    concepts = data.get("concepts", [])
+    if not isinstance(concepts, list):
+        raise ExtractionError("'concepts' is not a list")
+
+    closed_nodes: list[ExtractedNode] = []
+    dropped: list[str] = []
+    for it in concepts:
+        if not isinstance(it, dict):
             continue
-        if r.get("type") not in _VALID_REL_TYPES:
+        ext = it.get("concept_id")
+        if ext not in by_id:
+            ext = by_label.get(normalize_label(str(it.get("label", ""))))
+        if ext is None or ext not in by_id:
+            dropped.append(str(it.get("label") or it))
             continue
-        if not r.get("source_label") or not r.get("target_label"):
-            continue
-        relations.append(
-            ExtractedRelation(r["source_label"], r["target_label"], r["type"])
+        evs = [_evidence(r) for r in it.get("evidence", []) if isinstance(r, dict)]
+        closed_nodes.append(
+            ExtractedNode(
+                type="concept",
+                label=by_id[ext],  # ontology's label, never the model's echo
+                summary=None,
+                importance=_as_float(it.get("importance")),
+                evidence=[e for e in evs if e is not None],
+                external_id=ext,
+            )
         )
 
-    return Extraction(nodes=nodes, relations=relations)
+    closed_nodes.extend(_pref_goal_nodes(data))
+
+    # Relations are ignored entirely in closed mode; the curriculum already
+    # defines how concepts relate.
+    return Extraction(nodes=closed_nodes, relations=[], dropped=dropped)
 
 
 _TUTOR_EVENT_TYPES = {"tutor_explanation"}
@@ -245,4 +368,4 @@ def filter_provenance(extraction: Extraction, events) -> tuple[Extraction, list[
             kept.append(n)
         else:
             dropped.append(n.label)
-    return Extraction(nodes=kept, relations=extraction.relations), dropped
+    return Extraction(nodes=kept, relations=extraction.relations, dropped=extraction.dropped), dropped

@@ -20,6 +20,7 @@ from engram.core.models import AuditRow, GraphView, LearningEvent, RecallResult
 
 if TYPE_CHECKING:
     from engram.core.keeper import Keeper
+    from engram.core.ontology import ConceptOntology
 
 
 class Engram:
@@ -131,6 +132,25 @@ class Engram:
         """Retroactively merge duplicate nodes in an existing graph (#6)."""
         keeper = self._make_keeper()
         return await keeper.repair_merges(learner_id)
+
+    async def seed_ontology(self, learner_id: str, ontology: ConceptOntology) -> dict:
+        """Seed (or re-seed) a learner's graph from a host-supplied curriculum.
+
+        Validates the ontology first — nothing is embedded or written on an
+        invalid one. Then embeds every concept, builds seed nodes/edges keyed
+        by the host's external ids, and upserts via `storage.apply_ontology`:
+        a concept the learner already holds is refreshed (label/summary/
+        embedding only — mastery/confidence/salience/importance untouched),
+        a new one is inserted, and none are ever deleted, so a curriculum
+        edit costs a learner zero progress.
+        """
+        from engram.core.ontology import build_seed_edges, build_seed_nodes, embed_texts
+
+        ontology.validate()
+        vectors = await self.embedder.embed(embed_texts(ontology))
+        nodes = build_seed_nodes(learner_id, ontology, vectors)
+        edges = build_seed_edges(learner_id, ontology)
+        return await self.storage.apply_ontology(learner_id, nodes, edges)
 
     async def audit(self, learner_id: str, since: Any = None, limit: int = 100) -> list[AuditRow]:
         rows = await self.storage.get_audit(learner_id, since, limit)

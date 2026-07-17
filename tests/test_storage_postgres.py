@@ -229,3 +229,18 @@ async def test_top_evidence_with_embedding_false_strips_embedding(database_url):
         assert default[a][0].embedding is not None
     finally:
         await storage.close()
+
+
+async def test_external_id_round_trips(database_url):
+    storage = PostgresStorage(database_url)
+    await storage.connect()
+    try:
+        learner = f"t-{uuid.uuid4()}"
+        nid = await storage.insert_node(
+            Node(learner_id=learner, type=NodeType.CONCEPT, label="Slope",
+                 external_id="c-slope", embedding=_vec(1, 0))
+        )
+        got = next(n for n in await storage.get_live_nodes(learner) if n.id == nid)
+        assert got.external_id == "c-slope"
+    finally:
+        await storage.close()

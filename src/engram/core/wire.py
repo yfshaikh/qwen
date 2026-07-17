@@ -34,6 +34,7 @@ class GraphEvidence(BaseModel):
 
 class GraphNode(BaseModel):
     id: str | None = None  # source (core.models.GraphNode / node.id) permits None;
+    external_id: str | None = None
     label: str             # required here would 500 /graph past the router's try/except
     type: str
     summary: str | None = None

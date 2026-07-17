@@ -9,11 +9,11 @@ from engram.core.graph import build_graph
 from engram.core.tokens import heuristic_token_count
 from tests.fakes import FakeEmbedder, FakeStorage
 
-RECALL_NODE_KEYS = {"id", "type", "label", "mastery", "confidence", "salience",
-                    "importance", "score", "scores", "evidence"}
+RECALL_NODE_KEYS = {"id", "external_id", "type", "label", "mastery", "confidence",
+                    "salience", "importance", "score", "scores", "evidence"}
 RECALL_EDGE_KEYS = {"id", "source", "target", "type", "weight"}
-GRAPH_NODE_KEYS = {"id", "label", "type", "summary", "mastery", "confidence",
-                   "salience", "importance", "evidence"}
+GRAPH_NODE_KEYS = {"id", "external_id", "label", "type", "summary", "mastery",
+                   "confidence", "salience", "importance", "evidence"}
 
 
 async def _seeded():

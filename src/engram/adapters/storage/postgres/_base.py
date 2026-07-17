@@ -21,13 +21,14 @@ from engram.core.models import LearningEvent, Node, NodeType
 
 _NODE_COLS = (
     "id, learner_id, type, label, summary, mastery, confidence, salience, "
-    "importance, embedding, source_refs, forgotten_at, created_at, last_seen_at"
+    "importance, embedding, source_refs, forgotten_at, created_at, last_seen_at, "
+    "external_id"
 )
 # Embedding-free projection for read paths that never touch node.embedding
 # (insights, graph.build_graph) — cuts a ~1024-float column off the wire.
 _NODE_COLS_LITE = (
     "id, learner_id, type, label, summary, mastery, confidence, salience, "
-    "importance, source_refs, forgotten_at, created_at, last_seen_at"
+    "importance, source_refs, forgotten_at, created_at, last_seen_at, external_id"
 )
 
 _EVENT_COLS = "id, learner_id, type, text, refs, signals, ts, consolidated_at"
@@ -81,6 +82,7 @@ def _row_to_node(row: asyncpg.Record, *, with_embedding: bool = True) -> Node:
         forgotten_at=row["forgotten_at"],
         created_at=row["created_at"],
         last_seen_at=row["last_seen_at"],
+        external_id=row["external_id"],
     )
 
 

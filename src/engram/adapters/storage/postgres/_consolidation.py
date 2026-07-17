@@ -128,13 +128,14 @@ class _ConsolidationMixin(_Base):
                 """
                 INSERT INTO engram_nodes
                   (learner_id, type, label, summary, mastery, confidence,
-                   salience, importance, embedding, source_refs, forgotten_at, last_seen_at)
-                VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)
+                   salience, importance, embedding, source_refs, external_id,
+                   forgotten_at, last_seen_at)
+                VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)
                 RETURNING id
                 """,
                 n.learner_id, n.type.value, n.label, n.summary, n.mastery,
                 n.confidence, n.salience, n.importance, n.embedding, n.source_refs,
-                n.forgotten_at, n.last_seen_at,
+                n.external_id, n.forgotten_at, n.last_seen_at,
             )
             idmap[n.id] = str(real)
         return idmap
@@ -200,6 +201,89 @@ class _ConsolidationMixin(_Base):
                 " WHERE id = ANY($1::uuid[])",
                 processed_event_ids,
             )
+
+    async def apply_ontology(self, learner_id: str, nodes, edges) -> dict:
+        """Upsert a host curriculum. Contract (spec §6.3):
+
+        - `nodes` each carry `external_id` and `id=None`; `edges` carry
+          EXTERNAL ids in source_id/target_id, resolved to real node ids here
+          (node ids don't exist until the nodes are written). One transaction.
+        - (learner_id, external_id) already exists -> UPDATE label/summary/
+          embedding ONLY. NEVER mastery/confidence/salience/importance/
+          forgotten_at/last_seen_at — a curriculum edit must cost a learner
+          zero progress.
+        - Not present -> INSERT.
+        - An existing external_id node absent from this ontology -> left
+          alone; the learner studied it, it keeps its mastery.
+        - Edges between two ontology-backed nodes -> replaced wholesale
+          (DELETE all such, then INSERT the new set). Edges touching any
+          non-ontology node are untouched.
+
+        "Edges between two ontology-backed nodes" means the concepts of THIS
+        ontology, not every ontology-backed node the learner has — otherwise
+        seeding a second curriculum (SAT math, then reading) would wipe the
+        first's edges. Scoped to this call's node set below.
+        """
+        async with self._require_pool.acquire() as conn:
+            async with conn.transaction():
+                ext_to_id: dict[str, str] = {
+                    r["external_id"]: str(r["id"])
+                    for r in await conn.fetch(
+                        "SELECT id, external_id FROM engram_nodes"
+                        " WHERE learner_id = $1 AND external_id IS NOT NULL",
+                        learner_id,
+                    )
+                }
+                inserted = updated = 0
+                for n in nodes:
+                    existing = ext_to_id.get(n.external_id)
+                    if existing is not None:
+                        # label/summary/embedding ONLY — see the upsert table.
+                        await conn.execute(
+                            "UPDATE engram_nodes SET label=$1, summary=$2,"
+                            " embedding=$3 WHERE id=$4",
+                            n.label, n.summary, n.embedding, existing,
+                        )
+                        updated += 1
+                        continue
+                    real = await conn.fetchval(
+                        """
+                        INSERT INTO engram_nodes
+                          (learner_id, type, label, summary, mastery, confidence,
+                           salience, importance, embedding, source_refs,
+                           external_id, last_seen_at)
+                        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)
+                        RETURNING id
+                        """,
+                        n.learner_id, n.type.value, n.label, n.summary, n.mastery,
+                        n.confidence, n.salience, n.importance, n.embedding,
+                        n.source_refs, n.external_id, n.last_seen_at,
+                    )
+                    ext_to_id[n.external_id] = str(real)
+                    inserted += 1
+
+                # Only edges among THIS ontology's concepts — not every
+                # ontology node the learner has, which would delete a
+                # previously-seeded curriculum's edges.
+                this_ids = [ext_to_id[n.external_id] for n in nodes]
+                await conn.execute(
+                    "DELETE FROM engram_edges WHERE learner_id = $1"
+                    " AND source_id = ANY($2::uuid[]) AND target_id = ANY($2::uuid[])",
+                    learner_id, this_ids,
+                )
+                n_edges = 0
+                for e in edges:
+                    s, t = ext_to_id.get(e.source_id), ext_to_id.get(e.target_id)
+                    if not s or not t:
+                        continue  # validate() proved endpoints exist; belt and braces
+                    await conn.execute(
+                        "INSERT INTO engram_edges"
+                        " (learner_id, source_id, target_id, type, weight)"
+                        " VALUES ($1,$2,$3,$4,$5)",
+                        learner_id, s, t, e.type.value, e.weight,
+                    )
+                    n_edges += 1
+                return {"inserted": inserted, "updated": updated, "edges": n_edges}
 
     async def merge_nodes(self, learner_id: str, keep_id: str, drop_id: str, *,
                           label, mastery, confidence, salience, importance,

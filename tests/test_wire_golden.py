@@ -65,8 +65,8 @@ def _client(storage):
     return httpx.AsyncClient(transport=ASGITransport(app=app), base_url="http://t")
 
 
-_GRAPH_NODE_KEYS = ["confidence", "evidence", "id", "importance", "label",
-                    "mastery", "salience", "summary", "type"]
+_GRAPH_NODE_KEYS = ["confidence", "evidence", "external_id", "id", "importance",
+                    "label", "mastery", "salience", "summary", "type"]
 _GRAPH_EDGE_KEYS = ["id", "source", "target", "type", "weight"]
 
 
@@ -103,8 +103,8 @@ async def test_audit_wire_shape():
         app.dependency_overrides.clear()
 
 
-_RECALL_NODE_KEYS = ["confidence", "evidence", "id", "importance", "label",
-                     "mastery", "salience", "score", "scores", "type"]
+_RECALL_NODE_KEYS = ["confidence", "evidence", "external_id", "id", "importance",
+                     "label", "mastery", "salience", "score", "scores", "type"]
 _RECALL_EDGE_KEYS = ["id", "source", "target", "type", "weight"]
 _RECALL_SCORES_KEYS = ["importance", "recency", "relevance"]
 

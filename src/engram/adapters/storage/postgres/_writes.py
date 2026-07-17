@@ -37,12 +37,14 @@ class _WritesMixin(_Base):
                 """
                 INSERT INTO engram_nodes
                   (learner_id, type, label, summary, mastery, confidence,
-                   salience, importance, embedding, source_refs, forgotten_at)
-                VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)
+                   salience, importance, embedding, source_refs, external_id,
+                   forgotten_at)
+                VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)
                 RETURNING id
                 """,
                 n.learner_id, n.type.value, n.label, n.summary, n.mastery,
-                n.confidence, n.salience, n.importance, n.embedding, n.source_refs, n.forgotten_at,
+                n.confidence, n.salience, n.importance, n.embedding,
+                n.source_refs, n.external_id, n.forgotten_at,
             )
             return str(nid)
 

@@ -97,9 +97,15 @@ class Keeper:
     # --- planning (pure: no DB writes) ----------------------------------
 
     async def _plan(self, learner_id: str, events) -> ConsolidationPlan:
-        extraction = await self._extract(events)
-        extraction, dropped = filter_provenance(extraction, events)
         live = await self.storage.get_live_nodes(learner_id)
+        vocab = [
+            (n.external_id, n.label)
+            for n in live
+            if n.external_id and n.type is NodeType.CONCEPT
+        ]
+        ext_to_id = {n.external_id: n.id for n in live if n.external_id}
+        extraction = await self._extract(events, vocab)
+        extraction, dropped = filter_provenance(extraction, events)
         now = self.clock()
 
         plan = ConsolidationPlan(
@@ -108,6 +114,9 @@ class Keeper:
         for label in dropped:
             plan.audit.append(AuditEntry(
                 op="link", rationale=f"dropped {label!r}: tutor-only provenance"))
+        for label in extraction.dropped:
+            plan.audit.append(AuditEntry(
+                op="link", rationale=f"dropped {label!r}: not in the ontology"))
         working_nodes: dict[str, _Work] = {n.id: _Work(node=n) for n in live if n.id}
 
         cand_vecs = (
@@ -119,7 +128,12 @@ class Keeper:
         new_counter = 0
 
         for cand, vec in zip(extraction.nodes, cand_vecs):
-            target_id = await self._resolve(cand, vec, working_nodes, plan)
+            if cand.external_id:
+                target_id = ext_to_id.get(cand.external_id)
+                if target_id is None:
+                    continue  # unreachable: vocab was built from these nodes
+            else:
+                target_id = await self._resolve(cand, vec, working_nodes, plan)
             if target_id is None:  # create new
                 target_id = f"tmp-{new_counter}"
                 new_counter += 1
@@ -205,17 +219,17 @@ class Keeper:
             plan.new_edges.append(edge)
         plan.edge_updates.extend(pending_updates.values())
 
-    async def _extract(self, events) -> Extraction:
-        msgs = build_extraction_messages(events)
+    async def _extract(self, events, vocabulary=None) -> Extraction:
+        msgs = build_extraction_messages(events, vocabulary)
         try:
             out = await self.llm.complete("extractor", msgs, schema=EXTRACTION_SCHEMA)
-            return parse_extraction(out.text or "")
+            return parse_extraction(out.text or "", vocabulary)
         except ExtractionError:
             repair = msgs + [
                 Message(role="user", content="Return ONLY valid JSON matching the schema.")
             ]
             out = await self.llm.complete("extractor", repair, schema=EXTRACTION_SCHEMA)
-            return parse_extraction(out.text or "")  # may raise -> consolidate aborts
+            return parse_extraction(out.text or "", vocabulary)  # may raise -> consolidate aborts
 
     async def _resolve(self, cand, vec, working_nodes, plan) -> str | None:
         """Return an existing node id to attach to, or None to create new.
@@ -322,7 +336,8 @@ class Keeper:
                 last = node.last_seen_at or now
                 days = max(0.0, (now - last).total_seconds() / 86400)
                 node.salience = decay_salience(node.salience, days, self.params.decay)
-                if (node.salience or 0.0) < self.params.prune_floor:
+                if (node.external_id is None
+                        and (node.salience or 0.0) < self.params.prune_floor):
                     node.forgotten_at = now
             if not nid.startswith("tmp-"):  # new nodes already carried in new_nodes
                 plan.node_updates.append(node)
@@ -376,6 +391,8 @@ class Keeper:
         for i, a in enumerate(live):
             for b in live[i + 1:]:
                 if a.type != b.type:
+                    continue
+                if a.external_id or b.external_id:
                     continue
                 pair_key = frozenset((a.id, b.id))
                 if pair_key in rejected:

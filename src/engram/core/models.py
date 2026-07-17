@@ -71,6 +71,7 @@ class Node:
     forgotten_at: datetime | None = None
     created_at: datetime = field(default_factory=_now)
     last_seen_at: datetime = field(default_factory=_now)
+    external_id: str | None = None
 
 
 @dataclass(slots=True)
@@ -123,6 +124,7 @@ class EvidenceRef(TypedDict):
 
 class ScoredNode(TypedDict):
     id: str | None
+    external_id: str | None
     type: str
     label: str
     mastery: float | None
@@ -149,6 +151,7 @@ class Subgraph(TypedDict):
 
 class GraphNode(TypedDict):
     id: str | None
+    external_id: str | None
     label: str
     type: str
     summary: str | None
@@ -204,6 +207,7 @@ def node_common_fields(n: Node) -> dict[str, Any]:
     """
     return {
         "id": n.id,
+        "external_id": n.external_id,
         "label": n.label,
         "type": n.type.value,
         "mastery": n.mastery,

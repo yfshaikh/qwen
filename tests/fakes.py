@@ -315,6 +315,51 @@ class FakeStorage:
                 if e.id in ids:
                     e.consolidated_at = stamp
 
+    async def apply_ontology(self, learner_id: str, nodes, edges) -> dict:
+        """Mirrors PostgresStorage.apply_ontology exactly — see its docstring
+        for the upsert contract. Ontology edges bypass insert_edge /
+        _assert_unique_pair on purpose: ontology validation already
+        guarantees one edge per undirected pair, and the wholesale delete
+        below clears the old ones first."""
+        ext_to_id = {
+            n.external_id: nid
+            for nid, n in self.nodes.items()
+            if n.learner_id == learner_id and n.external_id is not None
+        }
+        inserted = updated = 0
+        for n in nodes:
+            existing = ext_to_id.get(n.external_id)
+            if existing is not None:
+                node = self.nodes[existing]
+                node.label = n.label          # label/summary/embedding ONLY
+                node.summary = n.summary
+                node.embedding = n.embedding
+                updated += 1
+                continue
+            n.id = self._next_id()
+            self.nodes[n.id] = n
+            ext_to_id[n.external_id] = n.id
+            inserted += 1
+        # Wholesale-replace edges among THIS ontology's concepts only — not
+        # every ontology node the learner has, which would delete a
+        # previously-seeded curriculum's edges.
+        this_ids = {ext_to_id[n.external_id] for n in nodes}
+        self.edges = [
+            e for e in self.edges
+            if not (e.learner_id == learner_id
+                    and e.source_id in this_ids and e.target_id in this_ids)
+        ]
+        n_edges = 0
+        for e in edges:
+            s, t = ext_to_id.get(e.source_id), ext_to_id.get(e.target_id)
+            if not s or not t:
+                continue
+            e.source_id, e.target_id = s, t
+            e.id = self._next_id()
+            self.edges.append(e)
+            n_edges += 1
+        return {"inserted": inserted, "updated": updated, "edges": n_edges}
+
     async def merge_nodes(self, learner_id, keep_id, drop_id, *, label, mastery,
                           confidence, salience, importance, rationale) -> None:
         for ev in self.evidence:
