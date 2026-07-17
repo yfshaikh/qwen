@@ -156,11 +156,36 @@ _SYSTEM_CLOSED = (
 )
 
 
+# Open-mode anchor (roadmap §3.1 fix #1). Before this, the extractor NEVER saw
+# the graph it was building: session 1 minted 'EM induction' next to session 0's
+# 'electromagnetic induction' because nothing told it the label existed, and the
+# dedup ladder measurably cannot catch that (jaccard 0.33 vs the 0.8 bar). This
+# is mem0's retrieve-then-decide done at extraction time: reuse the exact label
+# when it's the same concept, so duplicates die at the source instead of in
+# _resolve. Unlike closed mode this stays OPEN — new nodes are still allowed.
+_KNOWN_GUIDE = (
+    "KNOWN NODES — this learner's graph already contains these (type: label):\n"
+    "{catalog}\n"
+    "If an event is about one of these, reuse the EXACT label shown — never a "
+    "variant, abbreviation, or expansion of it ('EM induction' and "
+    "'electromagnetic induction' must be ONE node). Do not mint a narrower "
+    "sub-concept of a known concept for a detail discussed in passing; attach "
+    "the evidence to the known concept instead. Create a new node only for "
+    "material no known node covers.\n\n"
+)
+
+
 def build_extraction_messages(
-    events, vocabulary: list[tuple[str, str]] | None = None
+    events,
+    vocabulary: list[tuple[str, str]] | None = None,
+    known: list[tuple[str, str]] | None = None,
 ) -> list[Message]:
     """`vocabulary` is [(external_id, label)] — a learner's ontology-backed
-    concepts. Falsy (None or []) = today's open extraction, unchanged.
+    concepts; when present, extraction is CLOSED and `known` is ignored (the
+    catalog already is the concept list). `known` is [(type, label)] — the
+    learner's existing live nodes, used to anchor OPEN extraction so labels are
+    reused instead of re-invented. Both falsy = the original open extraction,
+    byte-identical prompt (a learner's first consolidation is unchanged).
 
     # ponytail: the vocabulary is dumped in full every consolidation. Marfini's
     # ~40 concepts is ~350 tokens/call; a 500-concept course would be ~4k. If
@@ -173,7 +198,12 @@ def build_extraction_messages(
             json.dumps({"type": e.type, "text": e.text, "signals": e.signals})
         )
     if not vocabulary:
-        user = "Events:\n" + "\n".join(lines) + "\n\nReturn the JSON described above."
+        prefix = ""
+        if known:
+            catalog = "\n".join(f"  {t}: {label}" for t, label in sorted(known))
+            prefix = _KNOWN_GUIDE.format(catalog=catalog)
+        user = (prefix + "Events:\n" + "\n".join(lines)
+                + "\n\nReturn the JSON described above.")
         return [Message(role="system", content=_SYSTEM), Message(role="user", content=user)]
 
     catalog = "\n".join(f"  {ext_id}\t{label}" for ext_id, label in vocabulary)

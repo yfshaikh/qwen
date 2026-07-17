@@ -119,6 +119,40 @@ def test_open_mode_prompt_unchanged():
     assert "CONCEPTS" not in a[1].content
 
 
+def test_known_labels_anchor_open_prompt():
+    events = [_ev("tell me about induction")]
+    known = [("concept", "electromagnetic induction"), ("goal", "pass the midterm")]
+    msgs = build_extraction_messages(events, None, known)
+    # still open mode: same calibrated system prompt, events still present
+    assert msgs[0].content is _SYSTEM
+    assert "KNOWN NODES" in msgs[1].content
+    assert "  concept: electromagnetic induction" in msgs[1].content
+    assert "  goal: pass the midterm" in msgs[1].content
+    assert "reuse the EXACT label" in msgs[1].content
+    assert "Events:\n" in msgs[1].content
+
+
+def test_known_labels_empty_keeps_prompt_byte_identical():
+    events = [_ev("what is slope?")]
+    assert (build_extraction_messages(events, None, [])[1].content
+            == build_extraction_messages(events)[1].content)
+    assert "KNOWN NODES" not in build_extraction_messages(events)[1].content
+
+
+def test_vocabulary_wins_over_known():
+    # ontology mode is closed; the known-labels anchor must not leak into it
+    msgs = build_extraction_messages(
+        [_ev("what is slope?")], VOCAB, [("concept", "Slope")])
+    assert "KNOWN NODES" not in msgs[1].content and "CONCEPTS" in msgs[1].content
+
+
+def test_known_catalog_order_is_deterministic():
+    events = [_ev("x")]
+    a = build_extraction_messages(events, None, [("concept", "B"), ("concept", "A")])
+    b = build_extraction_messages(events, None, [("concept", "A"), ("concept", "B")])
+    assert a[1].content == b[1].content
+
+
 def test_closed_prompt_carries_catalog_and_forbids_relations():
     msgs = build_extraction_messages([_ev("what is slope?")], VOCAB)
     assert msgs[0].content is not _SYSTEM

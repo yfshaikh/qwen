@@ -112,16 +112,21 @@ It prints a `[PASS]`/`[FAIL]` line per check (with metrics and up to five
 the run status is not `passed` **or** any regression is found vs `--against`;
 otherwise 0.
 
-**The six checks** (each a file in `checks/`, registered by name):
+**The checks** (each a file in `checks/`, registered by name):
 
 | Check | Measures |
 |---|---|
 | `recall_probes` | Do the scenario probes surface the expected nodes (`node_hit_rate`, `mean_rank`, `mastered_leak_rate`)? |
-| `dedup` | Are near-duplicate concepts merged, not fanned out (`duplicate_label_rate`)? |
+| `dedup` | Are near-duplicate concepts merged, not fanned out (`duplicate_label_rate`, per live node)? Legacy generator scenarios only — frozen cases use `concepts`. |
 | `importance` | Do high-signal nodes rank above noise? |
 | `integrity` | Graph well-formedness (`integrity_failures`, `orphan_edges`). |
 | `lifecycle` | Do decay/prune transitions fire correctly over sim time (`lifecycle_failures`)? |
 | `behavior` | Live arm — does memory change tutor behavior (`on_re_explanation_rate` vs `baseline_re_explanation_rate`)? Spends LLM calls (`needs="live"`). |
+| `concepts` | Required concepts present (via calibrated aliases), absolute duplicate caps, cross-type duplicate detection. |
+| `edges` | Expected prerequisite/part_of edges present with the right direction; reversals forbidden. |
+| `abstention` | No hallucinated concepts — labels the transcript never justified. |
+| `knowledge_update` | Misconception → correction arcs land in mastery/evidence. |
+| `preferences` | Durable preferences/goals extracted without over-extraction; transient requests are not minted as preferences. |
 
 **Scenario YAML additions** (both optional, backward-compatible):
 
@@ -154,6 +159,77 @@ gitignored). An ambiguous suffix errors and lists the matches. Comparison is
 worse direction. Metrics present in only one of the two runs are ignored (a fully
 disjoint metric set yields no regressions but prints a warning).
 
+## Frozen benchmarks & regression testing
+
+Two hand-authored, frozen scenarios are the trustworthy core of the eval:
+[`em-frozen-v1.yaml`](../eval/scenarios/em-frozen-v1.yaml) (the iteration case)
+and [`sat-linear-holdout-v1.yaml`](../eval/scenarios/sat-linear-holdout-v1.yaml)
+(the overfitting guard — **never** point an iterate-verify loop at it; it exists
+to distinguish "Engram improved" from "Engram memorised em-frozen-v1"). Both
+freeze student **and** tutor text, so the extractor is the only LLM in the loop
+and a graph difference means the Keeper changed.
+
+### The verdicts are not deterministic — use `--repeat`
+
+A frozen transcript pins the eval's *input*, not its *verdict*: at
+temperature 0 on byte-identical sessions, the extractor still attributes the
+same answer to different concepts run-to-run. Measured 2026-07-17 (×10,
+[`eval/runs/variance-em-frozen-v1.md`](../eval/runs/variance-em-frozen-v1.md)):
+
+| check | verdict stability (n=7 scored) | single run trustworthy? |
+|---|---|---|
+| `abstention`, `integrity`, `recall_probes` | stable pass | yes |
+| `concepts`, `knowledge_update` | stably red | yes (as "still broken") |
+| `edges` | passes 1/7 | **no** |
+| `preferences` | passes 2/7 | **no** |
+
+A "stable" verdict at n runs only resolves flip rates ≥ ~1/n — `edges` looked
+stably red at n=4 and flips at n=7. Re-measure with
+`python tools/eval_variance.py <scenario> -n 10` after any change to the
+extraction pipeline; stability claims go stale when the code under test moves.
+
+### Regression protocol for new features
+
+```
+python -m engram.eval run eval/scenarios/em-frozen-v1.yaml --repeat 5 --concurrency 1
+```
+
+- Per-check verdict is a **strict majority of the asked N**; runs lost to 429s
+  or crashes count against (a gate must not pass on a sample it didn't get).
+  Flaky checks are flagged in the output. Exit 0 iff every check holds a
+  majority.
+- **Compare aggregates to aggregates.** Run `--repeat` before the feature and
+  after; compare per-check pass counts and metric means. Never compare single
+  run to single run — that is how a coin flip becomes a "verified fix".
+- Power: N=5 catches gross regressions (stable-pass → mostly-fail), not subtle
+  pass-rate drops. Runs cost ~$0.005; raise N when the answer matters.
+- `--concurrency 1` on Groq's free tier — its 8k TPM cap loses ~3/10 runs at
+  concurrency 2 even with the adapter's retries.
+- `--against` (metric-level regression vs a baseline run) does not compose with
+  `--repeat` yet; cross-aggregate metric comparison is manual.
+
+### What this instrument cannot tell you
+
+- Both scenarios are **synthetic authored prose**. Engram has never been
+  evaluated on a real learner conversation; claims transfer only as far as the
+  transcripts resemble one.
+- Checks match concepts via **aliases calibrated to the current extractor's
+  labels**. A change that shifts labeling style can fail checks through alias
+  gaps rather than real regressions — every failure prints its
+  `unmatched labels` line so a human can tell the two apart. Do not "fix" an
+  alias gap by editing the fixture; that is a human calibration decision.
+- The frozen path exercises **ingest → consolidate only**. Recall weights and
+  tutor behavior are covered by `sweep`/`demo`/`behavior`, which are noisier.
+
+### Ground truth is read-only to automation
+
+The frozen fixtures and every check module are digest-pinned by
+`tests/eval/test_benchmark_integrity.py` — any edit fails the suite loudly.
+Agents iterating on Engram change Engram, not the referee: widening a
+threshold or adding an alias makes the number green while the bug ships.
+Deliberate ground-truth changes (recalibration, new checks) are a human
+decision, finalized by repinning the digest.
+
 ## Known limitations & future improvements
 
 The v2 `run` verb + multi-session scenarios address the early
@@ -176,10 +252,10 @@ Tier-2 sweep is wired: `python -m engram.eval sweep <scenario> <fixture> --grid 
 
 Remaining items:
 
-1. **Determinism / sample size.** The behavior arm is a single run over a few
-   turns and `temperature` is unset, so judge numbers wobble between runs. *Fix:*
-   pin `temperature=0` for student/tutor/judge (deferred — it touches the shared
-   LLM adapter and would also change the production tutor) and/or average N runs.
+1. **Determinism / sample size.** ~~Pin temperature~~ — done per role
+   (`Settings.temperature_for`; extractor/reflector at 0), and measured to be
+   insufficient: temp 0 does **not** deliver stable verdicts (see "Frozen
+   benchmarks" above). N-run aggregation (`run --repeat`) is the working answer.
 
 2. **Scenario fidelity / student drift.** The LLM student can wander off the
    seeded hidden state — in the first run the intended "concrete examples"

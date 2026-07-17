@@ -85,6 +85,33 @@ async def test_links_to_existing_above_tau_high():
     assert fs.nodes[existing].mastery == 0.3 * 1.0 + 0.7 * 0.5  # EWMA blend
 
 
+async def test_extractor_sees_existing_labels_in_dynamic_mode():
+    # Fix #1 (roadmap §3.1): the second consolidation must anchor on the
+    # first one's labels instead of re-inventing them.
+    fs = FakeStorage()
+    await fs.insert_node(
+        Node(learner_id="a", type=NodeType.CONCEPT, label="Limits",
+             mastery=0.5, salience=0.5, confidence=0.5, embedding=[1.0, 0.0],
+             last_seen_at=FIXED_NOW)
+    )
+    await _ingest(fs, "a")
+    llm = FakeLLM(canned_text=_extraction([]))
+    emb = _StubEmbedder({}, default=[0.0, 1.0])
+    await _keeper(fs, llm, emb).consolidate("a")
+
+    user_content = llm.complete_calls[0][1][1].content
+    assert "KNOWN NODES" in user_content
+    assert "  concept: Limits" in user_content
+
+
+async def test_extractor_prompt_unchanged_on_first_consolidation():
+    fs = FakeStorage()
+    await _ingest(fs, "a")
+    llm = FakeLLM(canned_text=_extraction([]))
+    await _keeper(fs, llm, _StubEmbedder({}, default=[0.0, 1.0])).consolidate("a")
+    assert "KNOWN NODES" not in llm.complete_calls[0][1][1].content
+
+
 async def test_contradiction_logs_resolve_audit():
     fs = FakeStorage()
     await fs.insert_node(

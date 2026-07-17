@@ -104,7 +104,13 @@ class Keeper:
             if n.external_id and n.type is NodeType.CONCEPT
         ]
         ext_to_id = {n.external_id: n.id for n in live if n.external_id}
-        extraction = await self._extract(events, vocab)
+        # Fix #1 (roadmap §3.1): in dynamic mode, anchor extraction on the
+        # labels that already exist so the extractor classifies against them
+        # instead of re-inventing variants. Ontology mode already has its
+        # closed catalog; a first consolidation has nothing to anchor on and
+        # keeps the original prompt byte-identical.
+        known = [(n.type.value, n.label) for n in live] if not vocab else None
+        extraction = await self._extract(events, vocab, known)
         extraction, dropped = filter_provenance(extraction, events)
         now = self.clock()
 
@@ -219,8 +225,8 @@ class Keeper:
             plan.new_edges.append(edge)
         plan.edge_updates.extend(pending_updates.values())
 
-    async def _extract(self, events, vocabulary=None) -> Extraction:
-        msgs = build_extraction_messages(events, vocabulary)
+    async def _extract(self, events, vocabulary=None, known=None) -> Extraction:
+        msgs = build_extraction_messages(events, vocabulary, known)
         try:
             out = await self.llm.complete("extractor", msgs, schema=EXTRACTION_SCHEMA)
             return parse_extraction(out.text or "", vocabulary)
