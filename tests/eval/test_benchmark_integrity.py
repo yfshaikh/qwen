@@ -36,7 +36,9 @@ FIXTURES = [SCENARIOS / "em-frozen-v1.yaml", SCENARIOS / "sat-linear-holdout-v1.
 CHECKS = ROOT / "src" / "engram" / "eval" / "checks"
 
 # Update ONLY when changing ground truth on purpose. See module docstring.
-PINNED = "a8efb2a6112727f904f44d7937147349c371eaab02347413c7afccddfb0d9c08"
+# 2026-07-17: dedup denominator C(n,2) pairs -> nodes (STRICTER; roadmap §4.4
+# "fix dedup's quadratic denominator"). Frozen fixtures untouched.
+PINNED = "eb815b0e4a92f3945a4312ef277aca1e0b654d24de62269a7cd7b6e30e45d46b"
 
 
 def _digest() -> tuple[str, list[str]]:

@@ -36,9 +36,18 @@ async def test_dedup_flags_normalized_duplicates():
         {"id": "4", "label": "Gone", "embedding": None, "forgotten_at": "2026-01-01"},
     ]
     res = await run_check(get_check("dedup"), _ctx(nodes))
-    # 3 live nodes -> 3 pairs, 1 duplicate pair
+    # 3 live nodes, 1 duplicate pair -> rate is per NODE (a per-pair rate went
+    # vacuous as C(n,2) grew; see the check)
     assert res.metrics["duplicate_label_rate"] == 1 / 3
     assert res.passed is False and any("NMOS" in d for d in res.details)
+
+
+async def test_dedup_rate_is_per_node_not_per_pair():
+    nodes = [{"id": str(i), "label": lab, "embedding": None, "forgotten_at": None}
+             for i, lab in enumerate(["Flux", "flux", "Ohm", "Lenz", "EMF"])]
+    res = await run_check(get_check("dedup"), _ctx(nodes))
+    # 1 dup pair over 5 nodes -> 0.2; the old per-pair rate would be 1/10
+    assert res.metrics["duplicate_label_rate"] == pytest.approx(0.2)
 
 
 async def test_dedup_small_graph_passes():

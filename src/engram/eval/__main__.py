@@ -96,6 +96,43 @@ async def _repair(args) -> None:
         await eng.aclose()
 
 
+async def _run_repeat(eng, sc, args) -> None:
+    """run --repeat N: same scenario N times, majority-of-N verdict per check.
+
+    This is how a fix gets verified on checks that flip run-to-run (measured:
+    `concepts`/`knowledge_update` flip on byte-identical input). A single run
+    remains the default for quick iteration; the gate is the repeat form.
+    """
+    from engram.eval import runs as run_store
+    from engram.eval.aggregate import aggregate, gate, render, scored
+    from engram.eval.clock import SimClock
+    from engram.eval.runner import execute_many
+
+    def new_dir():
+        _, run_dir = run_store.new_run(sc.id)
+        return run_dir
+
+    def on_done(r: dict) -> None:
+        failed = [c["name"] for c in r.get("checks", []) if not c["passed"]]
+        print(f"  {r['run_id']}  status={r['status']}  "
+              f"${r['cost']['usd']:.4f}"
+              + (f"  failed: {', '.join(failed)}" if failed else ""),
+              file=sys.stderr, flush=True)
+
+    print(f"running {sc.id} x{args.repeat} (concurrency {args.concurrency})",
+          file=sys.stderr, flush=True)
+    results = await execute_many(
+        eng, sc, new_dir, n=args.repeat,
+        checks=args.checks.split(",") if args.checks else None,
+        concurrency=args.concurrency,
+        max_cost_usd=args.budget_usd, clock_factory=SimClock, on_done=on_done)
+
+    by = aggregate(results)
+    print(render(by, n_asked=args.repeat, n_scored=len(scored(results))))
+    print(f"total cost=${sum(r['cost']['usd'] for r in results):.4f}")
+    raise SystemExit(0 if gate(by, args.repeat) else 1)
+
+
 async def _run(args) -> None:
     from engram.eval import runs as run_store
     from engram.eval.clock import SimClock
@@ -106,6 +143,11 @@ async def _run(args) -> None:
     await eng.connect()
     try:
         sc = load_scenario(args.scenario)
+        if args.repeat > 1:
+            if args.against:
+                raise SystemExit("--against does not compose with --repeat")
+            await _run_repeat(eng, sc, args)
+            return  # unreachable — _run_repeat exits; keeps control flow obvious
         _, run_dir = run_store.new_run(sc.id)
         checks = args.checks.split(",") if args.checks else None
 
@@ -203,6 +245,10 @@ def main() -> None:
     rn.add_argument("--budget-usd", type=float, default=None)
     rn.add_argument("--against")
     rn.add_argument("--tolerance", type=float, default=0.0)
+    rn.add_argument("--repeat", type=int, default=1,
+                    help="run N times and gate on majority-of-N per check; "
+                         "required to verify fixes on checks that flip run-to-run")
+    rn.add_argument("--concurrency", type=int, default=2)
     rp = sub.add_parser("repair")
     rp.add_argument("--learner", required=True)
     args = ap.parse_args()

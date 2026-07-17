@@ -33,46 +33,13 @@ import sys
 from collections import defaultdict
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any
 
 from engram.core.engram import Engram
 from engram.eval import runs as run_store
+from engram.eval.aggregate import scored as _scored
 from engram.eval.clock import SimClock
-from engram.eval.runner import execute_run
+from engram.eval.runner import execute_many
 from engram.eval.scenario import Scenario, load_scenario
-
-
-async def _one(eng: Any, sc: Scenario, budget: float | None,
-               sem: asyncio.Semaphore) -> dict:
-    async with sem:
-        run_id, run_dir = run_store.new_run(sc.id)
-        print(f"  start {run_id}", file=sys.stderr, flush=True)
-        try:
-            # Each run gets a fresh SimClock: execute_run hands it to the run-scoped
-            # Engram and the sessions advance it, so a shared one would leak gap_days
-            # between concurrent runs and silently change the decay math.
-            data = await execute_run(eng, sc, run_dir, max_cost_usd=budget,
-                                     clock=SimClock())
-        except Exception as exc:  # noqa: BLE001 — one bad run must not kill the sample
-            print(f"  ERROR {run_id}: {type(exc).__name__}: {exc}", file=sys.stderr)
-            return {"run_id": run_id, "status": "crashed",
-                    "error": f"{type(exc).__name__}: {exc}", "checks": [],
-                    "cost": {"usd": 0.0}}
-        print(f"  done  {run_id}  status={data['status']}  "
-              f"${data['cost']['usd']:.4f}", file=sys.stderr, flush=True)
-        return data
-
-
-def _scored(results: list[dict]) -> list[dict]:
-    """Runs that actually produced verdicts.
-
-    A run that 429s or busts its budget has status `error` and an EMPTY checks list.
-    Filtering only on `crashed` (this script raising) let those count as samples: the
-    first live 5x run had 3 of 5 rate-limited, and the report announced "all 7 checks
-    stable across 5 identical runs" off 2 real ones. A variance tool that overstates
-    its own sample size is worse than no tool.
-    """
-    return [r for r in results if r["status"] != "crashed" and r.get("checks")]
 
 
 def _report(sc: Scenario, results: list[dict], n: int) -> str:
@@ -97,6 +64,11 @@ def _report(sc: Scenario, results: list[dict], n: int) -> str:
         "The question this answers: **is each check's verdict stable across "
         f"identical runs?** {len(ok)}/{len(ok)} or 0/{len(ok)} is trustworthy. "
         "Anything between is a coin flip and cannot verify a fix on its own.",
+        "",
+        f"⚠️ Resolution: {len(ok)} runs can only see flip rates ≥ ~1/{len(ok)}. "
+        "A 'stable' verdict here is stability *at this sample size*, not proof — "
+        "`concepts` looked stably red at n=4 on 2026-07-15 and flips at ~1/15 "
+        "in the full run history.",
         "",
         "## Verdict stability",
         "",
@@ -202,14 +174,24 @@ async def main() -> int:
     out = Path(args.out or f"eval/runs/variance-{sc.id}.md")
     out.parent.mkdir(parents=True, exist_ok=True)
 
+    def _new_dir():
+        _, run_dir = run_store.new_run(sc.id)
+        print(f"  start {run_dir.name}", file=sys.stderr, flush=True)
+        return run_dir
+
+    def _on_done(r: dict) -> None:
+        print(f"  done  {r['run_id']}  status={r['status']}  "
+              f"${r['cost']['usd']:.4f}", file=sys.stderr, flush=True)
+
     eng = Engram.from_env()
     await eng.connect()
     try:
-        sem = asyncio.Semaphore(max(1, args.concurrency))
         print(f"running {sc.id} x{args.n} (concurrency {args.concurrency})",
               file=sys.stderr, flush=True)
-        results = await asyncio.gather(
-            *[_one(eng, sc, args.budget_usd, sem) for _ in range(args.n)])
+        results = await execute_many(
+            eng, sc, _new_dir, n=args.n, concurrency=args.concurrency,
+            max_cost_usd=args.budget_usd, clock_factory=SimClock,
+            on_done=_on_done)
     finally:
         await eng.aclose()
 

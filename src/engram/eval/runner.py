@@ -69,6 +69,47 @@ def _utcnow_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
+async def execute_many(
+    base_eng: Any, scenario: Scenario, new_run_dir: Callable[[], Path], *,
+    n: int, checks: list[str] | None = None, concurrency: int = 2,
+    max_cost_usd: float | None = None,
+    clock_factory: Callable[[], Any] | None = None,
+    emit: Callable[[dict], None] | None = None,
+    on_done: Callable[[dict], None] | None = None,
+) -> list[dict]:
+    """Run the same scenario n times; never raises for a single bad run.
+
+    Runs share one Engram (one pool, one LLM client); each gets its own run dir,
+    throwaway learner, and fresh clock (a shared clock would leak gap_days
+    between concurrent runs and silently change the decay math). Concurrency is
+    capped because providers rate-limit, and a 429 mid-run pollutes the sample
+    with a fake 'error' verdict. A run that raises past execute_run's own
+    handling is returned as status='crashed' with empty checks — aggregate.py
+    counts it against the majority rather than dropping it from the sample.
+    """
+    sem = asyncio.Semaphore(max(1, concurrency))
+
+    async def one() -> dict:
+        async with sem:
+            run_dir: Path | None = None
+            try:
+                run_dir = Path(new_run_dir())
+                data = await execute_run(
+                    base_eng, scenario, run_dir, checks=checks,
+                    max_cost_usd=max_cost_usd,
+                    clock=clock_factory() if clock_factory else None, emit=emit)
+            except Exception as exc:  # noqa: BLE001 — one bad run must not kill the sample
+                data = {"run_id": run_dir.name if run_dir else "?",
+                        "status": "crashed",
+                        "error": f"{type(exc).__name__}: {exc}", "checks": [],
+                        "cost": {"usd": 0.0}}
+            if on_done:
+                on_done(data)
+            return data
+
+    return list(await asyncio.gather(*[one() for _ in range(n)]))
+
+
 async def execute_run(
     base_eng: Any, scenario: Scenario, run_dir: Path, *,
     checks: list[str] | None = None, max_cost_usd: float | None = None,
@@ -162,6 +203,12 @@ async def execute_run(
                     LearningEvent(learner_id=learner_id, type="utterance", text=user),
                     LearningEvent(learner_id=learner_id, type="tutor_explanation", text=reply),
                 ])
+            # consolidate() only — deliberately NOT repair_merges (roadmap §4.4
+            # asked for this decision to be recorded). repair is an admin/CLI
+            # verb outside the production write path; running it here would
+            # measure a pipeline production doesn't run, and would mask the
+            # same-batch dedup bugs (`tmp-` hole) the frozen checks exist to
+            # catch. When repair becomes part of the write path, add it here.
             report = await run_eng.consolidate(learner_id)
             graph = await snapshot_graph(run_eng.storage, learner_id, include_forgotten=True)
             snap = {"session": si,
