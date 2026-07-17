@@ -158,6 +158,94 @@ async def test_aclose_cancels_inflight_consolidation():
     assert host.is_consolidating("L") is False
 
 
+# --- ontology seeding (seed_soon + consolidation gate) -----------------------
+
+class _SeedThenConsolidateEngram:
+    """Records the ORDER of seed vs consolidate calls, with a gated seed so a
+    test can hold the seed open and prove consolidation waits for it."""
+    enabled = True
+
+    def __init__(self):
+        import asyncio
+        self.order: list[str] = []
+        self.seed_gate = asyncio.Event()
+
+    async def connect(self): ...
+    async def aclose(self): ...
+
+    async def seed_ontology(self, learner_id: str, ontology):
+        await self.seed_gate.wait()
+        self.order.append(f"seed:{learner_id}")
+        return {"inserted": 1, "updated": 0, "edges": 0}
+
+    async def consolidate(self, learner_id: str):
+        self.order.append(f"consolidate:{learner_id}")
+        from engram.core.consolidation import ConsolidationReport
+        return ConsolidationReport(learner_id=learner_id)
+
+
+async def test_seed_soon_runs_on_host_and_survives(caplog):
+    import asyncio
+    eng = _SeedThenConsolidateEngram()
+    eng.seed_gate.set()                              # let the seed complete
+    host = EngramHost(eng)
+    await host.start()
+    host.seed_soon("L", object())
+    assert host.is_seeding("L") is True
+    for _ in range(20):
+        await asyncio.sleep(0)
+        if not host.is_seeding("L"):
+            break
+    assert eng.order == ["seed:L"]
+    assert host.is_seeding("L") is False
+    await host.aclose()
+
+
+async def test_seed_soon_coalesces_inflight():
+    import asyncio
+    eng = _SeedThenConsolidateEngram()               # gate stays closed
+    host = EngramHost(eng)
+    await host.start()
+    for _ in range(5):
+        host.seed_soon("L", object())                # only the first creates a task
+    await asyncio.sleep(0)
+    eng.seed_gate.set()
+    for _ in range(20):
+        await asyncio.sleep(0)
+        if not host.is_seeding("L"):
+            break
+    assert eng.order == ["seed:L"]                    # 5 calls -> exactly one seed
+    await host.aclose()
+
+
+async def test_consolidate_waits_for_inflight_seed():
+    import asyncio
+    eng = _SeedThenConsolidateEngram()               # seed gated shut
+    host = EngramHost(eng)
+    await host.start()
+    host.seed_soon("L", object())
+    await asyncio.sleep(0)
+    host.consolidate_soon("L")                        # must block on the seed
+    for _ in range(10):
+        await asyncio.sleep(0)
+    assert eng.order == []                            # neither ran: seed still gated
+    eng.seed_gate.set()                               # release the seed
+    for _ in range(30):
+        await asyncio.sleep(0)
+        if not host.is_consolidating("L"):
+            break
+    assert eng.order == ["seed:L", "consolidate:L"]   # seed strictly before consolidate
+    await host.aclose()
+
+
+async def test_seed_soon_noop_when_disabled():
+    eng = _SeedThenConsolidateEngram()
+    host = EngramHost(eng)                            # not started -> disabled
+    host.seed_soon("L", object())
+    assert host.is_seeding("L") is False
+    assert eng.order == []
+
+
 # --- E4: log builders ---------------------------------------------------------
 
 async def test_log_turn_builds_standard_pair():

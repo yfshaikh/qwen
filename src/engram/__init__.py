@@ -16,6 +16,12 @@ from __future__ import annotations
 
 from engram.core.consolidation import ConsolidationReport
 from engram.core.engram import Engram
+from engram.core.ontology import (
+    ConceptOntology,
+    OntologyConcept,
+    OntologyEdge,
+    OntologyError,
+)
 from engram.core.models import (
     AuditRow,
     Edge,
@@ -40,8 +46,9 @@ from engram.runtime.factory import from_env
 __version__ = "0.1.0"
 
 __all__ = [
-    "AuditRow", "ConsolidationReport", "DisabledEngram", "Edge", "EdgeType",
-    "Engram", "EngramHost", "Evidence", "EvidenceKind", "EvidenceRef",
-    "GraphEdge", "GraphNode", "GraphView", "LearningEvent", "Node", "NodeType",
+    "AuditRow", "ConceptOntology", "ConsolidationReport", "DisabledEngram",
+    "Edge", "EdgeType", "Engram", "EngramHost", "Evidence", "EvidenceKind",
+    "EvidenceRef", "GraphEdge", "GraphNode", "GraphView", "LearningEvent",
+    "Node", "NodeType", "OntologyConcept", "OntologyEdge", "OntologyError",
     "RecallResult", "ScoredNode", "Subgraph", "SubgraphEdge", "from_env",
 ]

@@ -46,6 +46,9 @@ class DisabledEngram:
     async def repair_merges(self, learner_id: str) -> dict:
         return {"merged": 0, "pairs": [], "skipped": True}
 
+    async def seed_ontology(self, learner_id: str, ontology: Any) -> dict:
+        return {"inserted": 0, "updated": 0, "edges": 0, "skipped": True}
+
     async def graph(self, learner_id: str, focus: str | None = None) -> GraphView:
         return GraphView(nodes=[], edges=[])
 
@@ -91,6 +94,7 @@ class EngramHost:
         self._failed = False
         self._tasks: set[asyncio.Task] = set()          # Task 4 fills these
         self._consolidating: dict[str, dict] = {}       # Task 4
+        self._seeding: dict[str, asyncio.Task] = {}     # in-flight ontology seeds
         # test seam: swap the factory without touching Engram
         from engram.runtime.factory import from_env
         self._engram_factory = from_env
@@ -147,6 +151,7 @@ class EngramHost:
                 pass
         self._tasks.clear()
         self._consolidating.clear()
+        self._seeding.clear()
         if self._engram is not None:
             try:
                 await self._engram.aclose()
@@ -160,6 +165,55 @@ class EngramHost:
 
     async def __aexit__(self, *exc: Any) -> None:
         await self.aclose()
+
+    # --- ontology seeding (fire-and-forget, host-owned) ------------------
+
+    def seed_soon(self, learner_id: str, ontology: Any) -> None:
+        """Fire-and-forget curriculum seed, owned by the host (NOT the caller's
+        request). Survives the originating request/websocket closing — the task
+        lives on the process-wide host and runs to completion server-side.
+
+        Idempotent and coalesced: if a seed for this learner is already in
+        flight, this is a no-op (re-seeding produces the same graph; the next
+        session picks up any curriculum edit anyway). Safe to call on every
+        session start. A disabled host seeds nothing.
+
+        Robust to interruption: seed_ontology's DB write is one transaction
+        (atomic — no half-seeded graph) and idempotent (a crash self-heals on
+        the next call), so there is no partial-state to clean up.
+        """
+        if not self.enabled:
+            return
+        existing = self._seeding.get(learner_id)
+        if existing is not None and not existing.done():
+            return
+        task = asyncio.create_task(self.memory.seed_ontology(learner_id, ontology))
+        self._seeding[learner_id] = task
+        self._tasks.add(task)
+
+        def _done(t: asyncio.Task) -> None:
+            if self._seeding.get(learner_id) is t:
+                self._seeding.pop(learner_id, None)
+            self._reap(t)
+
+        task.add_done_callback(_done)
+
+    def is_seeding(self, learner_id: str) -> bool:
+        t = self._seeding.get(learner_id)
+        return t is not None and not t.done()
+
+    async def _await_seed(self, learner_id: str) -> None:
+        """Block until any in-flight seed for this learner completes. Called
+        before consolidation so it never runs open-mode against a half-seeded
+        graph (which would mint dynamic concepts duplicating the ontology's). A
+        failed seed is swallowed — consolidation proceeds degraded and the seed
+        retries next session."""
+        t = self._seeding.get(learner_id)
+        if t is not None and not t.done():
+            try:
+                await t
+            except Exception:  # noqa: BLE001 — seed failure must not block consolidation
+                pass
 
     # --- consolidation orchestration (E3) --------------------------------
 
@@ -179,6 +233,9 @@ class EngramHost:
 
     async def _consolidate_loop(self, learner_id: str) -> None:
         try:
+            # Never consolidate over a half-seeded graph — wait out any in-flight
+            # ontology seed first, so closed-mode extraction has its vocabulary.
+            await self._await_seed(learner_id)
             while True:
                 try:
                     report = await self.memory.consolidate(learner_id)
