@@ -30,11 +30,19 @@ For the original product vision, see [DESIGN.md](DESIGN.md).
 
 1. **Ingest** — append `LearningEvent`s (utterances, tutor explanations, notes,
    quiz outcomes). They sit as pending evidence until consolidation.
-2. **Consolidate (Keeper)** — LLM-backed offline pass: extract concepts, link,
-   merge duplicates, decay/prune. Expensive work stays off the live turn.
+2. **Consolidate (Keeper)** — LLM-backed offline pass, split into focused
+   calls: extract entities (anchored on the graph's existing labels so the
+   same concept is never re-minted under a new name), link/merge, attribute
+   assessment evidence to the ONE concept being assessed, infer relations over
+   the final labels, then decay/prune. Expensive work stays off the live turn.
 3. **Recall** — embed the query, score nodes (recency / importance / relevance),
    walk edges, fill a token budget. Returns a prompt-ready `text_block` plus a
    typed subgraph. No chat LLM on this path.
+
+Optionally, **seed** each learner's graph from your curriculum first (see
+"Seeding a curriculum ontology" below) — then concepts and prerequisite edges
+come from your course structure, and consolidation only updates the learner's
+mastery over them.
 
 The graph is the source of truth. The live tutor should not re-read raw chat
 history for long-term memory.
@@ -61,6 +69,7 @@ from engram import (
     RecallResult, Subgraph, ScoredNode,
     GraphView, GraphNode, GraphEdge, AuditRow,
     ConsolidationReport,
+    ConceptOntology, OntologyConcept, OntologyEdge, OntologyError,
 )
 ```
 
@@ -142,6 +151,55 @@ prompt_block = res.text_block          # str
 nodes = res.subgraph["nodes"]          # list[ScoredNode] (TypedDict / dict)
 ```
 
+### Seeding a curriculum ontology
+
+If your app already has a concept map (a course's concepts + prerequisite
+edges, a topic tree), hand it to Engram instead of letting the LLM re-derive
+it per learner. Seeded graphs switch extraction to **closed-vocabulary** mode:
+the extractor classifies events into *your* concepts (off-list mentions are
+dropped to the audit log, never invented), relations come from the curriculum
+only, and consolidation focuses on updating mastery.
+
+```python
+from engram import ConceptOntology, OntologyConcept, OntologyEdge
+
+ontology = ConceptOntology(
+    concepts=[
+        OntologyConcept(id="c-slope", label="Slope", summary="rise over run"),
+        OntologyConcept(id="c-sif", label="Slope-intercept form"),
+    ],
+    # DIRECTION: source must be understood BEFORE target.
+    # A host row {concept: C, prerequisite: P} ("C requires P")
+    # becomes OntologyEdge(source=P, target=C, type="prerequisite").
+    edges=[OntologyEdge(source="c-slope", target="c-sif", type="prerequisite")],
+)
+
+# fire-and-forget at session/course start — owned by the host process,
+# survives the request; consolidation awaits any in-flight seed
+host.seed_soon(learner_id, ontology)
+host.is_seeding(learner_id)              # UI indicator
+# or await it directly:
+await host.memory.seed_ontology(learner_id, ontology)
+# -> {"inserted": N, "updated": N, "edges": N}
+```
+
+Semantics worth knowing:
+
+- **Validated at the boundary** (`OntologyError`): unique concept ids, edge
+  endpoints must exist, one edge per undirected pair, per-edge-type acyclicity.
+- **Idempotent + atomic.** Re-seeding upserts labels/summaries/embeddings by
+  your stable `id` (stored as `external_id`) and replaces that ontology's
+  edges — it **never touches mastery**, so re-seeding after a curriculum edit
+  is safe mid-course.
+- **Seeded nodes are exempt from pruning and dedup** — the curriculum is not
+  the LLM's to forget or merge.
+- Seeding needs only the **embedder** (no chat LLM) — it embeds concept
+  text, so it's cheap and fast.
+- **Scoping is by `learner_id`.** Engram has no course concept; to keep one
+  graph per course, compose the id host-side: `learner_id = f"{uid}:{course_id}"`.
+- `ontology=None` learners (never seeded) run today's dynamic extraction —
+  the two modes coexist per learner.
+
 ### Direct facade (tests / advanced)
 
 ```python
@@ -154,6 +212,41 @@ await eng.aclose()
 ```
 
 Hosts should prefer `EngramHost` so degradation and scheduling stay consistent.
+
+### Full verb reference (`host.memory.*`)
+
+Every verb exists on both `Engram` and `DisabledEngram` (typed empties when
+disabled — no `None` guards needed):
+
+| Verb | Returns | Notes |
+|---|---|---|
+| `ingest(events)` | `None` | append `LearningEvent`s as pending |
+| `recall(learner, query, budget)` | `RecallResult` | `text_block` + scored subgraph; no chat LLM |
+| `consolidate(learner)` | `ConsolidationReport` | the Keeper pass; per-learner advisory lock |
+| `seed_ontology(learner, ontology)` | `dict` | see above |
+| `repair_merges(learner)` | `dict` | admin: retroactively merge duplicate nodes on an existing graph |
+| `graph(learner, focus=None)` | `GraphView` | full graph for UI; `focus` filters to a node + neighbors |
+| `audit(learner, since, limit)` | `list[AuditRow]` | Keeper decision log (merges, drops, contradictions) |
+| `events(learner, limit)` | `list[LearningEvent]` | raw event history |
+| `health()` | `bool` | storage reachability |
+| `create_voice_session` / `append_voice_turn` / `end_voice_session` / `list_voice_sessions` / `list_voice_turns` | ids / lists | optional voice-session store for hosts that persist spoken turns |
+
+### Insights (read-only analytics)
+
+`engram.insights.Insights` wraps aggregation queries over the same graph —
+nothing here writes:
+
+| Method | Answers |
+|---|---|
+| `summary(learner)` | node/evidence counts, mastery distribution |
+| `mastery_timeline(learner, ...)` | mastery over time per concept |
+| `hotspots(learner, k)` | weakest / most-struggled concepts |
+| `activity(learner, days)` | events per day |
+| `review_queue(learner, k)` | what to review next (decay-aware) |
+| `blockers(learner, ...)` | low-mastery concepts that gate others via prerequisite edges |
+
+The standalone service exposes these at `GET /insights/*` (summary,
+mastery-timeline, hotspots, activity, review-queue, blockers).
 
 ---
 
@@ -201,6 +294,25 @@ app.include_router(memory_router(
 Useful for greenfield hosts. Prefer host-owned handlers when you already have
 auth middleware and want the control flow visible in-repo.
 
+### Or: run Engram as a standalone service
+
+`uvicorn engram.app.main:app` serves the full HTTP surface (this is what the
+`web/` console talks to). **No auth is built in** — put it behind your own
+gateway if exposed. Endpoints:
+
+| Route | Purpose |
+|---|---|
+| `GET /health` | liveness + storage check |
+| `POST /add` | ingest events (mem0-style alias) |
+| `POST /recall` | recall for a learner/query/budget |
+| `POST /consolidate` | run the Keeper now |
+| `GET /graph` · `GET /history` · `GET /audit` · `GET /events/stream` | graph, mastery history, audit log, SSE event stream |
+| `POST /chat` | built-in demo tutor (SSE) |
+| `GET /memory/status` | consolidating? node counts |
+| `POST /admin/repair-merges` | retroactive duplicate merge |
+| `GET /insights/*` | summary, mastery-timeline, hotspots, activity, review-queue, blockers |
+| `/eval/*` | eval-run launcher/browser (dev tooling; gate with `ENGRAM_EVAL_UI`) |
+
 ### TypeScript types
 
 Generated from the same Pydantic models:
@@ -231,9 +343,13 @@ See `packages/engram-types/README.md`.
 | Variable | Purpose |
 |---|---|
 | `ENGRAM_DATABASE_URL` / `DATABASE_URL` | Postgres + pgvector DSN |
-| `OPENROUTER_API_KEY` (or provider keys) | Chat models |
-| `OPENAI_API_KEY` | Embeddings (default stack) |
-| `ENGRAM_MODEL_*` | Tutor / extractor / reflector / embedder slugs |
+| `OPENROUTER_API_KEY` (+ `OPENROUTER_BASE_URL`) | Chat provider (any OpenAI-compatible endpoint) |
+| `OPENAI_API_KEY` (+ `OPENAI_BASE_URL`) | Embeddings (default stack) |
+| `CEREBRAS_API_KEY` (+ `CEREBRAS_BASE_URL`) | **Optional** 429-fallback chat provider — used only when the primary exhausts retries on a rate limit (e.g. a daily token cap); never load-balanced |
+| `ENGRAM_MODEL_TUTOR/EXTRACTOR/REFLECTOR/EMBEDDER` | Role → model slugs (required) |
+| `ENGRAM_MODEL_STUDENT/JUDGE` | Optional eval-role overrides (judge falls back to the reflector's model — set it to something cheap) |
+| `ENGRAM_TEMPERATURE_<ROLE>` | Optional per-role temperature (e.g. `ENGRAM_TEMPERATURE_EXTRACTOR=0`; unset = provider default) |
+| `ENGRAM_EVAL_PRICE_IN_PER_M` / `_OUT_PER_M` | Token prices so eval runs can meter cost / trip `--budget-usd` |
 
 `EngramHost.from_env(**kwargs)` lets the host override models and DSN from its
 own config file (kwargs outrank env).

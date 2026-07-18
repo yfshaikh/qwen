@@ -26,9 +26,11 @@ consuming it:
 | `memory_router` | Optional FastAPI router (`engram.integrations.fastapi`) exposing the HTTP surface — mount it behind your own auth. |
 
 Host apps embed Engram **in-process** via `EngramHost` (not as a separate
-microservice). Typical flow: start the host in your app lifespan, `log_turn` on
-each tutor turn, `consolidate_soon` when a session ends, `recall` into the next
-prompt.
+microservice). Typical flow: start the host in your app lifespan, optionally
+`seed_soon(learner, ontology)` at course/session start (seed the graph from
+your curriculum's concepts + prerequisites — Engram then focuses on tracking
+mastery over them), `log_turn` on each tutor turn, `consolidate_soon` when a
+session ends, `recall` into the next prompt.
 
 ```python
 from engram import EngramHost
