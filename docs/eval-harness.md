@@ -172,21 +172,26 @@ and a graph difference means the Keeper changed.
 ### The verdicts are not deterministic — use `--repeat`
 
 A frozen transcript pins the eval's *input*, not its *verdict*: at
-temperature 0 on byte-identical sessions, the extractor still attributes the
-same answer to different concepts run-to-run. Measured 2026-07-17 (×10,
+temperature 0 on byte-identical sessions, the extractor still varies
+run-to-run. Measured 2026-07-18 on post-§3.1 code (×10, all scored,
 [`eval/runs/variance-em-frozen-v1.md`](../eval/runs/variance-em-frozen-v1.md)):
 
-| check | verdict stability (n=7 scored) | single run trustworthy? |
+| check | verdict stability (n=10) | single run trustworthy? |
 |---|---|---|
-| `abstention`, `integrity`, `recall_probes` | stable pass | yes |
-| `concepts`, `knowledge_update` | stably red | yes (as "still broken") |
-| `edges` | passes 1/7 | **no** |
-| `preferences` | passes 2/7 | **no** |
+| `abstention`, `concepts`, `integrity`, `recall_probes` | 10/10 pass | yes |
+| `preferences` | 9/10 | mostly — one flip in ten |
+| `knowledge_update` | 7/10 | **no** — use `--repeat` |
+| `edges` | 4/10 | **no** — ~50% flip rate; even majority-of-5 is coin-flippy. Raise N or treat as advisory until edge extraction stabilizes further |
+
+(For contrast, before the §3.1 fixes — 2026-07-17, n=7 — `concepts` and
+`knowledge_update` were stably RED and `edges` passed 1/7. The fixes moved the
+distributions, not just the verdicts.)
 
 A "stable" verdict at n runs only resolves flip rates ≥ ~1/n — `edges` looked
 stably red at n=4 and flips at n=7. Re-measure with
 `python tools/eval_variance.py <scenario> -n 10` after any change to the
-extraction pipeline; stability claims go stale when the code under test moves.
+extraction pipeline; stability claims go stale when the code under test moves
+(this table has already been rewritten once for exactly that reason).
 
 ### Regression protocol for new features
 
@@ -204,7 +209,12 @@ python -m engram.eval run eval/scenarios/em-frozen-v1.yaml --repeat 5 --concurre
 - Power: N=5 catches gross regressions (stable-pass → mostly-fail), not subtle
   pass-rate drops. Runs cost ~$0.005; raise N when the answer matters.
 - `--concurrency 1` on Groq's free tier — its 8k TPM cap loses ~3/10 runs at
-  concurrency 2 even with the adapter's retries.
+  concurrency 2 even with the adapter's retries. For its 200k tokens/DAY cap
+  (which no backoff outlives), set `CEREBRAS_API_KEY`: the LLM adapter falls
+  back to Cerebras on a 429 that survives retries — fallback ONLY, never
+  load-balanced, model name's vendor prefix stripped. ⚠️ A fallback-served run
+  is a different provider serving the same model: label phrasings measurably
+  shift, so don't recalibrate aliases from fallback runs alone.
 - `--against` (metric-level regression vs a baseline run) does not compose with
   `--repeat` yet; cross-aggregate metric comparison is manual.
 
@@ -214,10 +224,20 @@ python -m engram.eval run eval/scenarios/em-frozen-v1.yaml --repeat 5 --concurre
   evaluated on a real learner conversation; claims transfer only as far as the
   transcripts resemble one.
 - Checks match concepts via **aliases calibrated to the current extractor's
-  labels**. A change that shifts labeling style can fail checks through alias
-  gaps rather than real regressions — every failure prints its
-  `unmatched labels` line so a human can tell the two apart. Do not "fix" an
-  alias gap by editing the fixture; that is a human calibration decision.
+  labels**, plus an **LLM residue matcher** (2026-07-18; built after measuring
+  that session-0 label minting drifts run-to-run and provider-to-provider even
+  at temperature 0, so no authored alias list converges). Deterministic alias
+  matching runs first; ONE `judge`-role call maps only the leftover
+  (missing-expected × unmatched-graph-labels). The LLM decides label IDENTITY
+  only — counts, duplicate caps, edge direction, and mastery assertions stay
+  deterministic on top, and two labels mapping to one concept still fails as a
+  duplicate. Every LLM-decided pair is printed in the check details
+  (`llm-matched 'X' -> 'Y'`) for human audit; matcher failure degrades to plain
+  deterministic matching. It is deliberately conservative: genuinely arguable
+  identities (e.g. 'single linear equations' vs 'Solving linear equations' —
+  the objects vs the skill) are declined and stay visible in the
+  `unmatched labels` line for a human to judge. Do not "fix" those by editing
+  the fixture unilaterally; ground-truth changes remain a human decision.
 - The frozen path exercises **ingest → consolidate only**. Recall weights and
   tutor behavior are covered by `sweep`/`demo`/`behavior`, which are noisier.
 

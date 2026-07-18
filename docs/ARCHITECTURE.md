@@ -38,7 +38,7 @@ flowchart LR
         Recall["recall()<br/>token-budgeted subgraph"]
     end
     Host -- "LearningEvent[]" --> Ingest --> Graph
-    Keeper -- "extract→link→merge→<br/>resolve→decay→prune" --> Graph
+    Keeper -- "extract→link→merge→evidence→<br/>edges→decay→prune" --> Graph
     Graph --> Keeper
     Host -- "recall(learner, query, budget)" --> Recall
     Graph --> Recall
@@ -219,9 +219,10 @@ flowchart TD
     Empty -- no --> Done0["empty report"]
     Empty -- yes --> Plan
     subgraph Plan["PLAN (pure — LLM/embedder, no DB writes)"]
-        Ex["extract<br/>(1 batched LLM call)"] --> Lk["link/merge<br/>(vectors; LLM if ambiguous)"]
-        Lk --> Rs["resolve<br/>(EWMA + contradictions)"]
-        Rs --> Dp["decay + prune<br/>(soft-delete)"]
+        Ex["extract entities<br/>(1 batched LLM call,<br/>anchored on existing labels)"] --> Lk["link/merge<br/>(vectors incl. same-batch;<br/>LLM if ambiguous)"]
+        Lk --> Ev["evidence pass<br/>(1 LLM call: attribute<br/>assessments, EWMA + contradictions)"]
+        Ev --> Ed["edge pass<br/>(1 LLM call: relations over<br/>final labels; skips settled pairs)"]
+        Ed --> Dp["decay + prune<br/>(soft-delete)"]
         Dp --> Sn["snapshot<br/>(mastery_history + watermark)"]
     end
     Plan --> Commit["apply_consolidation(plan)<br/>ONE transaction"]

@@ -1,5 +1,18 @@
 # Known issues / rough edges
 
+> **Status (2026-07-18):** #6's real root cause — "the extractor labels the same
+> concept differently run-to-run" — is now fixed at the source, not just swept
+> up after: extraction is anchored on the graph's existing labels (roadmap §3.1
+> fix #1), same-batch duplicates reach the cosine/reflector layers (fix #3, the
+> `tmp-` hole), and the dead token-jaccard layer is deleted. Consolidation is
+> now a split pipeline (entities → evidence attribution → edges — fixes #8/#2),
+> which also resolved the mastery-attribution instability found after this
+> file's last update. Measured on the frozen benchmark: `concepts` 5/5 runs
+> exactly at the expected count, zero duplicates; all 7 checks majority-green.
+> #4's residual (transient learner requests minted as preferences) is improved
+> but still intermittent. Gates: [`eval/scenarios/em-frozen-v1.yaml`](../eval/scenarios/em-frozen-v1.yaml)
+> via `python -m engram.eval run <scenario> --repeat 5 --concurrency 1`.
+>
 > **Status (2026-07-11):** all six issues addressed by the memory-quality-fixes spec — #1 session buffer (recall), #2 needs-attention section + prompt directive, #3 node importance + neutral prior, #4 provenance filter, #5 edge dedup w/ precedence, #6 combined merge + repair sweep. Eval gates: [`eval/scenarios/multi-session-em.yaml`](../eval/scenarios/multi-session-em.yaml).
 
 Observed from the `demo-8334427e` trace (2026-06-27). None are bugs — recall
