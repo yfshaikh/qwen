@@ -69,17 +69,18 @@ async def test_normalized_label_match_merges_across_sessions():
     assert llm.reflector_calls == 0
 
 
-async def test_jaccard_overlap_merges():
+async def test_token_overlap_alone_no_longer_merges():
+    # Fix #3 deleted the jaccard branch (measured 0-for-7 on real duplicates).
+    # These share 4 of 5 tokens (old jaccard 0.8) but embed orthogonally
+    # (_LenEmbedder) and the reflector says no — so they stay SEPARATE now.
+    # Near-miss labels are the cosine/reflector layers' job, not lexical's.
     storage = FakeStorage()
-    # Normalized labels are NOT equal; token sets share 4 of 5 -> jaccard 0.8.
-    # _LenEmbedder gives different lengths orthogonal vectors, so cosine is 0.0
-    # and only the jaccard branch can merge these.
     llm = _SeqLLM([_extraction("electromagnetic induction faraday law"),
                    _extraction("electromagnetic induction faraday law basics")])
     await _consolidate(llm, storage)
     await _consolidate(llm, storage)
     live = await storage.get_live_nodes("L")
-    assert len(live) == 1
+    assert len(live) == 2
 
 
 async def test_distinct_labels_low_cosine_stay_separate():
@@ -165,9 +166,8 @@ async def test_merge_keeps_fuller_when_abbrev_comes_second():
 
 
 async def test_same_batch_merge_adopts_fuller_label():
-    # Same-batch dedup is lexical-only (the cosine path skips tmp nodes), so the
-    # pair must share >=80% tokens to merge: 4 of 5 -> jaccard 0.8. The fuller
-    # (5-token) label wins.
+    # Same-batch pair merges via the COSINE layer (fix #3 closed the tmp- hole;
+    # FakeEmbedder vectors are all-parallel, cosine 1.0). The fuller label wins.
     storage = FakeStorage()
     llm = _SeqLLM([_extraction("alpha beta gamma delta",
                                "alpha beta gamma delta epsilon")])
@@ -175,3 +175,56 @@ async def test_same_batch_merge_adopts_fuller_label():
     live = await storage.get_live_nodes("L")
     assert len(live) == 1
     assert live[0].label == "alpha beta gamma delta epsilon"
+
+
+class _TableEmbedder:
+    """Substring-keyed vectors so a test can place a pair at an exact cosine."""
+
+    def __init__(self, table, default):
+        self.table = table
+        self.default = default
+
+    async def embed(self, texts):
+        out = []
+        for t in texts:
+            vec = self.default
+            for key, v in self.table.items():
+                if key in t:
+                    vec = v
+            out.append(list(vec))
+        return out
+
+
+async def test_same_batch_cosine_merge_tmp_hole_closed():
+    # Fix #3: the cosine layer now sees same-batch tmp nodes. Two candidates
+    # with NO shared tokens but identical embeddings merge in one batch —
+    # before the fix the loop skipped tmp- ids and this minted two nodes
+    # ('AC Circuits' / 'AC Circuits (RLC Impedance)', the measured hole).
+    storage = FakeStorage()
+    llm = _SeqLLM([_extraction("Ohm Law", "Current Voltage Rule")])
+    eng = Engram(storage=storage, llm=llm,
+                 embedder=_TableEmbedder({}, default=[1.0, 0.0]))
+    await eng.ingest([LearningEvent(learner_id="L", type="utterance", text="hi")])
+    report = await eng.consolidate("L")
+    live = await storage.get_live_nodes("L")
+    assert len(live) == 1
+    assert report.merged == 1
+    assert llm.reflector_calls == 0  # >= tau_high, no reflector needed
+
+
+async def test_same_batch_reflector_band_reaches_tmp_nodes():
+    # cosine 0.8 sits in the tau_low..tau_high band -> the reflector is asked
+    # about a same-batch tmp node (pre-fix it never saw one) and its 'yes'
+    # merges the pair.
+    storage = FakeStorage()
+    llm = _SeqLLM([_extraction("Ohm Law", "Current Voltage Rule")],
+                  reflector_text="yes")
+    eng = Engram(storage=storage, llm=llm,
+                 embedder=_TableEmbedder({"Ohm Law": [1.0, 0.0],
+                                          "Current Voltage Rule": [0.8, 0.6]},
+                                         default=[0.0, 1.0]))
+    await eng.ingest([LearningEvent(learner_id="L", type="utterance", text="hi")])
+    await eng.consolidate("L")
+    live = await storage.get_live_nodes("L")
+    assert len(live) == 1
+    assert llm.reflector_calls == 1

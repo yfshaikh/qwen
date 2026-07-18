@@ -10,7 +10,22 @@ import json
 
 from engram.core.engram import Engram
 from engram.core.models import Completion, EdgeType, LearningEvent, Message
-from tests.fakes import FakeEmbedder, FakeStorage
+from tests.fakes import FakeStorage
+
+
+class _OrthoEmbedder:
+    """Distinct labels -> orthogonal vectors. FakeEmbedder's vectors are all
+    parallel (cosine 1.0 between ANY two texts), which after fix #3 closed the
+    tmp- hole would cosine-merge Limitzz and Continuity within a batch — these
+    tests need two distinct nodes to hang edges between."""
+
+    async def embed(self, texts):
+        out = []
+        for t in texts:
+            v = [0.0] * 8
+            v[len(t) % 8] = 1.0  # deterministic; 'Limitzz s' and 'Continuity s' differ
+            out.append(v)
+        return out
 
 
 class _SeqLLM:
@@ -40,7 +55,7 @@ def _extraction(relations: list[dict]) -> tuple[str, str]:
 
 
 async def _consolidate(llm, storage, learner="L"):
-    eng = Engram(storage=storage, llm=llm, embedder=FakeEmbedder(dim=8))
+    eng = Engram(storage=storage, llm=llm, embedder=_OrthoEmbedder())
     await eng.ingest([LearningEvent(learner_id=learner, type="utterance", text="hi")])
     return await eng.consolidate(learner)
 

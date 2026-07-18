@@ -34,9 +34,7 @@ from engram.core.mastery import decay_salience, ewma, observation_for, update_co
 from engram.core.ports import EmbedderPort, LLMPort, StoragePort
 from engram.core.models import Edge, EdgeType, Evidence, EvidenceKind, Message, Node, NodeType
 from engram.core.recall import cosine_similarity
-from engram.core.text import canonical_label, normalize_label, token_jaccard
-
-_JACCARD_MERGE = 0.8  # ponytail: fixed; promote to KeeperParams if a sweep ever tunes it
+from engram.core.text import canonical_label, normalize_label
 
 
 def _utcnow() -> datetime:
@@ -44,11 +42,15 @@ def _utcnow() -> datetime:
 
 
 def _labels_match(a: str, b: str) -> bool:
-    """Merge-by-label predicate: normalized labels equal (and non-empty), or
-    lexically close enough by token-Jaccard. Shared by _resolve and
-    _find_dup_pair."""
+    """Merge-by-label predicate: normalized labels equal (and non-empty).
+    Shared by _resolve and _find_dup_pair. The token-Jaccard >= 0.8 branch was
+    deleted (fix #3): measured 0-for-7 on real duplicates (jaccard 0.33 on
+    'EM induction' ~ 'electromagnetic induction' vs the 0.8 bar) — dead code
+    that only fired on artificial token-overlap labels. Near-miss labels are
+    the cosine/reflector layers' job.
+    """
     norm_a = normalize_label(a)
-    return (bool(norm_a) and norm_a == normalize_label(b)) or token_jaccard(a, b) >= _JACCARD_MERGE
+    return bool(norm_a) and norm_a == normalize_label(b)
 
 
 @dataclass(slots=True)
@@ -311,10 +313,12 @@ class Keeper:
     async def _resolve(self, cand, vec, working_nodes, plan) -> str | None:
         """Return an existing node id to attach to, or None to create new.
 
-        Merge when normalized labels are equal or token-Jaccard >= 0.8 (lexical —
-        applies to same-batch tmp nodes too), else cosine >= tau_high, else send
-        the tau_low..tau_high band to the reflector. Never merges across
-        NodeType (goal ≠ concept). (#6)
+        Merge when normalized labels are equal (lexical), else cosine >=
+        tau_high, else send the tau_low..tau_high band to the reflector. Every
+        layer applies to same-batch tmp nodes too — the cosine loop used to
+        skip them (`if nid.startswith("tmp-")`), which left same-batch
+        duplicates guarded only by the lexical layer; that was the `tmp-` hole
+        (fix #3). Never merges across NodeType (goal ≠ concept). (#6)
         """
         cand_type = NodeType(cand.type)
         cand_norm = normalize_label(cand.label)
@@ -330,7 +334,7 @@ class Keeper:
                     return nid
         best_id, best_sim = None, -1.0
         for nid, w in working_nodes.items():
-            if nid.startswith("tmp-") or not w.node.embedding:
+            if not w.node.embedding:
                 continue
             if w.node.type != cand_type:
                 continue
@@ -338,6 +342,13 @@ class Keeper:
             if sim > best_sim:
                 best_sim, best_id = sim, nid
         if best_id is not None and best_sim >= self.params.tau_high:
+            # Audited like the other two merge paths — cosine merges were the
+            # only ones invisible to the report/audit trail (found by fix #3's
+            # tmp-hole test asserting report.merged).
+            plan.audit.append(AuditEntry(
+                op="merge",
+                rationale=f"merged {cand.label!r} into "
+                          f"{working_nodes[best_id].node.label!r} (cos={best_sim:.2f})"))
             self._adopt_label(working_nodes[best_id], cand)
             return best_id
         if best_id is not None and best_sim > self.params.tau_low:

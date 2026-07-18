@@ -19,17 +19,6 @@ def normalize_label(s: str) -> str:
     return " ".join(words)
 
 
-def token_jaccard(a: str, b: str) -> float:
-    """Jaccard overlap of normalized label tokens; 0.0 when either side is empty."""
-    ta = set(normalize_label(a).split())
-    tb = set(normalize_label(b).split())
-    ta.discard("")
-    tb.discard("")
-    if not ta or not tb:
-        return 0.0
-    return len(ta & tb) / len(ta | tb)
-
-
 def canonical_label(current: str, candidate: str) -> str:
     """Pick the more canonical surface form when two labels name the SAME merged
     concept: prefer more word tokens, then more letters, else keep `current`
