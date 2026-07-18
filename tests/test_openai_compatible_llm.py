@@ -1,6 +1,6 @@
 import httpx
 import pytest
-from openai import AsyncOpenAI, BadRequestError
+from openai import AsyncOpenAI, BadRequestError, RateLimitError
 
 from engram.adapters.llm.openai_compatible import OpenAICompatibleLLM
 from engram.core.models import Message
@@ -277,3 +277,83 @@ async def test_other_400s_still_raise():
     llm = _raiser(_sdk_error({"error": {"code": "invalid_api_key", "message": "nope"}}))
     with pytest.raises(BadRequestError):
         await llm.complete("extractor", [Message(role="user", content="q")])
+
+
+# ---------------------------------------------------------------------------
+# 429 fallback (Cerebras). Fallback-only: primary keeps its own retries; only
+# a rate limit that outlives them (e.g. a daily token cap) switches provider,
+# and only for that one call.
+# ---------------------------------------------------------------------------
+
+def _rate_limit_error() -> RateLimitError:
+    request = httpx.Request("POST", "https://example.invalid/v1/chat/completions")
+    response = httpx.Response(
+        429, request=request,
+        json={"error": {"message": "tokens per day (TPD) exceeded",
+                        "type": "tokens", "code": "rate_limit_exceeded"}})
+    exc = _CLIENT._make_status_error_from_response(response)
+    assert isinstance(exc, RateLimitError)
+    return exc
+
+
+def _with_fallback(primary_exc, recorder):
+    class _Completions:
+        async def create(self, **kwargs):
+            raise primary_exc
+    class _Chat:
+        completions = _Completions()
+    class _Primary:
+        chat = _Chat()
+    return OpenAICompatibleLLM(
+        client=_Primary(),
+        role_to_model={"extractor": "openai/extract-model"},
+        fallback_client=_FakeClient(recorder),
+    )
+
+
+async def test_rate_limit_falls_back_with_stripped_model():
+    recorder = {}
+    llm = _with_fallback(_rate_limit_error(), recorder)
+    out = await llm.complete("extractor", [Message(role="user", content="q")],
+                             schema={"type": "object"})
+    assert recorder["kwargs"]["model"] == "extract-model"  # vendor prefix stripped
+    assert recorder["kwargs"]["response_format"] == {"type": "json_object"}
+    assert out.text == "the answer"
+
+
+async def test_rate_limit_without_fallback_raises():
+    llm = _raiser(_rate_limit_error())
+    with pytest.raises(RateLimitError):
+        await llm.complete("extractor", [Message(role="user", content="q")])
+
+
+async def test_non_rate_limit_error_does_not_hit_fallback():
+    recorder = {}
+    llm = _with_fallback(
+        _sdk_error({"error": {"code": "invalid_api_key", "message": "nope"}}),
+        recorder)
+    with pytest.raises(BadRequestError):
+        await llm.complete("extractor", [Message(role="user", content="q")])
+    assert recorder == {}  # fallback never called
+
+
+async def test_fallback_json_validate_failed_still_returns_partial():
+    class _FallbackCompletions:
+        async def create(self, **kwargs):
+            raise _sdk_error(_jvf("partial from fallback"))
+    class _FallbackChat:
+        completions = _FallbackCompletions()
+    class _Fallback:
+        chat = _FallbackChat()
+    class _PrimaryCompletions:
+        async def create(self, **kwargs):
+            raise _rate_limit_error()
+    class _PrimaryChat:
+        completions = _PrimaryCompletions()
+    class _Primary:
+        chat = _PrimaryChat()
+    llm = OpenAICompatibleLLM(client=_Primary(),
+                              role_to_model={"extractor": "m"},
+                              fallback_client=_Fallback())
+    out = await llm.complete("extractor", [Message(role="user", content="q")])
+    assert out.text == "partial from fallback"

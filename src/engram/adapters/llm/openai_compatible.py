@@ -51,17 +51,29 @@ def _failed_generation(exc: BaseException) -> str | None:
     return got if isinstance(got, str) else ""
 
 
+def _is_rate_limit(exc: BaseException) -> bool:
+    return getattr(exc, "status_code", None) == 429
+
+
 class OpenAICompatibleLLM:
     """Implements core.ports.LLMPort against any OpenAI-compatible chat API."""
 
     def __init__(self, client: _AsyncChatClient, role_to_model: dict[str, str],
-                 role_to_temperature: dict[str, float] | None = None) -> None:
+                 role_to_temperature: dict[str, float] | None = None,
+                 fallback_client: _AsyncChatClient | None = None) -> None:
         self._client = client
         self._role_to_model = role_to_model
         # Absent role -> omit `temperature` entirely and take the provider
         # default. Not the same as passing 0.0, and not the same as passing 1.0 —
         # providers differ on their default, so we don't guess one.
         self._role_to_temperature = role_to_temperature or {}
+        # FALLBACK ONLY — used when the primary exhausts its own retries on a
+        # 429 (e.g. a daily token cap, which no amount of backoff outlives).
+        # Never load-balanced, never primary: eval runs are calibrated against
+        # the primary provider's models, and a silent provider switch would be
+        # a variance source. complete() only; streams stay primary-only (a
+        # mid-stream provider swap can't resume cleanly anyway).
+        self._fallback = fallback_client
 
     async def complete(
         self,
@@ -102,9 +114,22 @@ class OpenAICompatibleLLM:
             resp = await self._client.chat.completions.create(**kwargs)
         except Exception as exc:
             partial = _failed_generation(exc)
-            if partial is None:
+            if partial is not None:
+                return Completion(text=partial, usage={}, model=model)
+            if self._fallback is None or not _is_rate_limit(exc):
                 raise
-            return Completion(text=partial, usage={}, model=model)
+            # Cerebras serves bare model names where OpenRouter/Groq use
+            # "vendor/model"; strip the prefix. If the fallback lacks the
+            # model it errors loudly — better than silently answering with a
+            # different model.
+            kwargs["model"] = model.rsplit("/", 1)[-1]
+            try:
+                resp = await self._fallback.chat.completions.create(**kwargs)
+            except Exception as fexc:
+                partial = _failed_generation(fexc)
+                if partial is None:
+                    raise
+                return Completion(text=partial, usage={}, model=kwargs["model"])
         text = resp.choices[0].message.content if resp.choices else None
         usage = self._usage_dict(getattr(resp, "usage", None))
         return Completion(text=text, usage=usage, model=getattr(resp, "model", model))
@@ -158,6 +183,13 @@ def build_llm(settings: Any) -> OpenAICompatibleLLM:
         # this is mostly a raised ceiling on how long it will keep honouring it.
         max_retries=5,
     )
+    fallback = None
+    if getattr(settings, "cerebras_api_key", None):
+        fallback = AsyncOpenAI(
+            api_key=settings.cerebras_api_key,
+            base_url=settings.cerebras_base_url,
+            max_retries=2,
+        )
     roles = ("tutor", "extractor", "reflector", "student", "judge")
     role_to_model = {r: settings.model_for(r) for r in roles}
     # Only roles with a configured temperature land in the map; the rest keep the
@@ -166,4 +198,5 @@ def build_llm(settings: Any) -> OpenAICompatibleLLM:
         r: t for r in roles if (t := settings.temperature_for(r)) is not None
     }
     return OpenAICompatibleLLM(client=client, role_to_model=role_to_model,
-                               role_to_temperature=role_to_temperature)
+                               role_to_temperature=role_to_temperature,
+                               fallback_client=fallback)

@@ -25,6 +25,15 @@ class Settings(BaseSettings):
     openrouter_api_key: str
     openrouter_base_url: str = "https://openrouter.ai/api/v1"
 
+    # Optional 429 fallback chat provider (Cerebras). Set CEREBRAS_API_KEY to
+    # enable; absent = no fallback, primary errors surface unchanged. Used ONLY
+    # when the primary exhausts its retries on a rate limit — e.g. Groq's free
+    # tier's 200k tokens/day cap mid-eval. Model names are the primary's with
+    # the vendor prefix stripped ("openai/gpt-oss-120b" -> "gpt-oss-120b").
+    cerebras_api_key: str | None = Field(default=None, alias="CEREBRAS_API_KEY")
+    cerebras_base_url: str = Field(
+        default="https://api.cerebras.ai/v1", alias="CEREBRAS_BASE_URL")
+
     # Embeddings provider (OpenAI)
     openai_api_key: str
     openai_base_url: str = "https://api.openai.com/v1"
