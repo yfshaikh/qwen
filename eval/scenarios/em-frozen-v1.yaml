@@ -1,0 +1,596 @@
+# Frozen benchmark case #1 — electromagnetic induction, 3 sessions.
+#
+# WHY THIS EXISTS
+# The v2 `run` verb generates the student turn AND the tutor reply live on every
+# run, so three LLMs vary per turn (student, tutor, extractor) and a graph change
+# cannot be attributed to any of them. This file freezes the student and tutor
+# text, leaving the EXTRACTOR as the only variable. A graph difference now means
+# the Keeper changed. That is the whole point.
+#
+# This is the Graphiti/LongMemEval pattern (hand-curated, frozen, committed) and
+# it is what this repo's own Phase 5 `gen` design already intended:
+#   "the transcript + graph are frozen into a fixture ... Done once; committed so
+#    replays are reproducible."   — docs/eval-harness.md
+# The v2 `run` verb regressed that. See docs/superpowers/roadmap.md §3.1 / §4.4.
+#
+# ⚠️ NOT YET RUNNABLE. Needs (in order):
+#   1. scenario.py: accept `transcript:` (a list of turns) as an alternative to
+#      `intent:` + `turns: <int>`; runner.py: replay it instead of calling the
+#      student/tutor LLMs.
+#   2. Extractor pinned to temperature=0 (see TEMPERATURE below).
+#   3. CALIBRATION RUN — the aliases below are guesses (see expect.concepts).
+#   4. New checks: `edges`, `abstention`, `knowledge_update`, `concepts`.
+#   5. Mutation-test every check: confirm it goes RED with the bug present.
+#      A check that passes while the bug is live is decoration, not a gate.
+#
+# ⚠️ HUMAN REVIEW REQUIRED — the `expect.edges` block below is authored ground
+# truth. If the physics is wrong, the benchmark bakes in the bug it is meant to
+# catch. Check the prerequisite directions before anything depends on them.
+#
+# ─────────────────────────────────────────────────────────────────────────────
+# THIS FILE IS READ-ONLY TO AUTOMATION
+# ─────────────────────────────────────────────────────────────────────────────
+# If an agent is iterating on fixes and verifying against this benchmark, it MUST
+# NOT edit this file. "Add an alias until it passes" and "relax the expected
+# edges" are the cheapest paths to green, and an optimiser will find them. That
+# is reward hacking, and it silently converts this gate into a rubber stamp.
+# Changes to the transcript or to `expect:` are a human decision.
+#
+# ─────────────────────────────────────────────────────────────────────────────
+# TEMPERATURE
+# ─────────────────────────────────────────────────────────────────────────────
+# The extractor MUST run at temperature=0 for this fixture to be a gate. With the
+# transcript frozen, sampling is the only remaining source of variance — greedy
+# decoding removes it and makes labels near-stable run to run.
+#
+# docs/eval-harness.md limitation #1 deferred pinning temperature because "it
+# touches the shared LLM adapter and would also change the production tutor."
+# That reason does not apply: temperature can be set PER ROLE (Settings.model_for
+# already establishes the role seam) or in the eval's own MeteredLLM wrapper.
+# Extractor at 0; production tutor untouched.
+#
+# Caveat: temp 0 is not bit-deterministic on most providers (batching, float
+# non-associativity). Close enough to gate on; not close enough to assume.
+
+id: em-frozen-v1
+description: >
+  Hand-authored, frozen. A student with solid Ohm's law learns electromagnetic
+  induction over three sessions, holds a Lenz's-law misconception (opposition is
+  caused by heat loss) through sessions 0-1, and has it corrected in session 2 by
+  the superconducting-loop counterexample.
+
+# Kept for documentation/parity with multi-session-em.yaml. With a frozen
+# transcript these are descriptive, not generative — nothing reads them to
+# produce turns.
+persona: >
+  An undergraduate three weeks out from an electromagnetism midterm. Solid on
+  Ohm's law. Abbreviates "electromagnetic induction" to "EM induction". Asked for
+  short bullet-point answers once, in session 0, and never again.
+hidden_state:
+  mastered: [Ohm's law]
+  misconception:
+    concept: Lenz's law
+    wrong: "induced current opposes motion because energy is lost as heat"
+    corrected_in_session: 2
+  preference: "short bullet-point answers"
+  goal: "pass the electromagnetism midterm"
+
+# --------------------------------------------------------------------------
+# THE FROZEN TRANSCRIPT
+# --------------------------------------------------------------------------
+# Deliberately short turns. The tutor's brevity is in-character (the learner
+# asked for bullets in session 0), which keeps the fixture cheap to consolidate.
+sessions:
+
+  # ---- Session 0 (day 0) — Ohm's law mastery, first contact, flux ----------
+  - transcript:
+      # Ohm's law as an unambiguous DEMONSTRATION, not a request for confirmation.
+      # It first read "...gives 3 A, right?" — and run b060e838 extracted that as
+      # `asked_about` (inert), which is defensible: the learner was asking, not
+      # demonstrating. Mastery stayed None and `expect.mastery` failed for a reason
+      # that was about the transcript's phrasing, not the Keeper. A benchmark turn
+      # must be unambiguous about what it is testing, or it tests the wrong thing.
+      - role: user
+        content: |-
+          Before we start: I've got Ohm's law down cold. V = IR, so 12 V across 4 Ω
+          is 3 A. No issues there.
+          I prefer short bullet-point answers, saves me time.
+          Goal is passing the electromagnetism midterm in three weeks.
+      - role: assistant
+        content: |-
+          - Correct: I = V/R = 12/4 = 3 A. Ohm's law is solid, we won't dwell on it.
+          - Noted on bullets.
+          - Three weeks is plenty. Let's go.
+
+      - role: user
+        content: "So what actually is electromagnetic induction?"
+      - role: assistant
+        content: |-
+          - A *changing* magnetic flux through a loop induces an EMF (a voltage).
+          - No change, no EMF. The change is the whole story.
+          - The formal statement is Faraday's law — we'll get there.
+
+      - role: user
+        content: "What's magnetic flux exactly?"
+      - role: assistant
+        content: |-
+          - Φ = B·A·cos θ — how much field pierces a surface.
+          - Units: webers (Wb).
+          - Change B, change A, or rotate the loop → Φ changes → EMF.
+
+      - role: user
+        content: "So flux is the thing I need to get first, and induction follows from it?"
+      - role: assistant
+        content: |-
+          - Exactly. Flux is the prerequisite.
+          - Faraday's law is literally a statement about dΦ/dt — you can't state it without flux.
+          - Get flux solid and induction follows.
+
+      - role: user
+        content: |-
+          Last one. If I push a magnet toward a coil, current flows and it shoves back at me.
+          Why does it push back?
+      - role: assistant
+        content: |-
+          - That's Lenz's law — next session, properly.
+          - Short version: the induced current opposes the *flux change*.
+          - Sit with that phrasing, it matters.
+
+  # ---- Session 1 (day 10) — Faraday, Lenz, the misconception --------------
+  - gap_days: 10
+    transcript:
+      - role: user
+        content: |-
+          Back. Recap: EM induction = flux change makes an EMF.
+          So what's Faraday's law?
+      - role: assistant
+        content: |-
+          - Faraday: ε = −dΦ/dt.
+          - Magnitude: faster flux change → bigger EMF.
+          - The minus sign is Lenz's law — it sets the direction.
+
+      - role: user
+        content: "Why the minus sign?"
+      - role: assistant
+        content: |-
+          - It encodes opposition: the induced EMF fights the flux change.
+          - That's Lenz's law, and it falls out of energy conservation.
+          - Quick check before we move on: WHY does the induced current oppose the magnet?
+
+      # The misconception, as an explicit WRONG ANSWER to an explicit question.
+      # Phrased this way on purpose: only quiz_correct/quiz_wrong/struggle/
+      # demonstrated carry a mastery signal (core/mastery.py KIND_OBSERVATION) —
+      # explained/asked_about/note are inert. A misconception merely *stated*
+      # would likely be tagged `explained`, leaving mastery=None, and
+      # expect.mastery could then never go green. A wrong answer to a posed
+      # question should extract as quiz_wrong (0.0).
+      - role: user
+        content: |-
+          Because energy gets lost as heat in the coil — the heat is what causes the
+          resistance to the magnet's motion.
+      - role: assistant
+        content: |-
+          - That's wrong, and it's the most common wrong answer here.
+          - The opposition comes from the induced current's own field opposing the flux *change*.
+          - Heat (I²R) is a consequence of the current, not the cause of the force.
+
+      - role: user
+        content: "But there IS heat though. Isn't that the same thing in the end?"
+      - role: assistant
+        content: |-
+          - Heat is real, but it's downstream.
+          - Causal order: ΔΦ → EMF → current → opposing field → force. Heat rides alongside.
+          - Hold that thought, I'll give you a test case next time.
+
+      - role: user
+        content: "Fine. What about transformers, how do those work?"
+      - role: assistant
+        content: |-
+          - Two coils on a shared core. A changing current in the primary makes a changing flux.
+          - That flux induces an EMF in the secondary. It's EM induction, nothing new.
+          - Turns ratio: Vs/Vp = Ns/Np.
+
+  # ---- Session 2 (day 30) — quiz, misconception repeated once, corrected --
+  - gap_days: 20
+    transcript:
+      - role: user
+        content: |-
+          Midterm's close. Quiz me on EM induction and Faraday's law.
+          And give me a hard one, don't go easy.
+      - role: assistant
+        content: |-
+          - Q1: a loop's flux goes 0.4 Wb → 0.1 Wb in 0.2 s. EMF?
+          - Q2: which way does the induced current flow?
+          - Q3: what sets the sign?
+
+      - role: user
+        content: |-
+          Q1: ΔΦ = −0.3 Wb over 0.2 s, so ε = 1.5 V.
+          Q2: it opposes the drop, so it tries to maintain the flux.
+          Q3: the minus sign... because the heat dissipation opposes it?
+      - role: assistant
+        content: |-
+          - Q1 correct: 1.5 V.
+          - Q2 correct.
+          - Q3 no. The sign is Lenz's law: the induced current's field opposes the *change in
+            flux*. Heat is a byproduct, not the cause.
+
+      - role: user
+        content: |-
+          Hang on. So if I dropped a magnet through a superconducting ring — zero resistance,
+          zero heat — it would still get repelled?
+      - role: assistant
+        content: |-
+          - Yes. That's exactly the right test to run.
+          - Zero resistance → persistent induced current → strong opposing field → strong force.
+          - Heat isn't in the causal chain at all.
+
+      - role: user
+        content: |-
+          Oh. That clicks. The opposition is about the field, and heat is just a side effect
+          of the current existing.
+      - role: assistant
+        content: |-
+          - Then say it back to me: a magnet approaches a loop. Which way does the induced
+            current flow, and why?
+
+      # The correction, as an explicit CORRECT ANSWER. Same reasoning as the s1
+      # wrong answer: "that clicks" alone is inert (explained), so mastery would
+      # never rise and `increased_from_session` could never be satisfied. A right
+      # answer to a posed question should extract as quiz_correct (1.0) or
+      # demonstrated (0.9) — either satisfies the arc.
+      - role: user
+        content: |-
+          Flux through the loop is increasing, so the induced current flows to make its own
+          field oppose that increase — it fights the *change in flux*, not the motion, and
+          not because of heat.
+      - role: assistant
+        content: |-
+          - Correct. That's Lenz's law, and you've got it.
+          - ΔΦ → EMF → current → opposing field. Heat rides along without steering.
+
+      - role: user
+        content: "What should I review before the midterm?"
+      - role: assistant
+        content: |-
+          - Lenz's law direction — you just got it, lock it in.
+          - Transformer turns ratio.
+          - Flux with angles (the cos θ trips people).
+          - Ohm's law you're solid on. Skip it.
+
+# --------------------------------------------------------------------------
+# GROUND TRUTH
+# --------------------------------------------------------------------------
+expect:
+
+  # -- Concepts that must exist as live nodes -------------------------------
+  #
+  # ⚠️ UNCALIBRATED — DO NOT TRUST THESE ALIASES YET. DO NOT HAND-EDIT THEM LATER.
+  #
+  # These are GUESSES, authored before ever running the extractor on this
+  # transcript. That is the same unwinnable game multi-session-em.yaml plays with
+  # its `aliases:` block — trying to predict every surface form an LLM might emit.
+  #
+  # Why it matters more than it looks: CONCEPT MATCHING IS THE FOUNDATION OF EVERY
+  # OTHER CHECK. `edges`, `mastery`, and `abstention` all key on concept identity.
+  # If "Electromagnetic induction" fails to match, the edge check
+  #   [Magnetic flux, Electromagnetic induction, prerequisite]
+  # goes red — not because direction churn is live, but because a name lookup
+  # missed. An iterating agent cannot tell those apart, "adjusts accordingly," and
+  # makes the code worse chasing a ghost. False negatives here poison everything.
+  #
+  # CALIBRATION PROCEDURE (do once, before this file gates anything):
+  #   1. Pin the extractor to temperature=0.
+  #   2. Run extraction on this frozen transcript ~5 times.
+  #   3. Collect every label produced. Diff across runs.
+  #   4. Replace the aliases below with what it ACTUALLY emits.
+  #   5. Record the run id here: calibrated_from: <run-id>
+  # This is roadmap §4.2's extractor-stability probe doing double duty: it
+  # measures the nondeterminism AND produces the alias list. Same run, both
+  # answers. If labels turn out stable at temp 0 — expected — no LLM matcher is
+  # needed and none should be built.
+  #
+  # After calibration these are OBSERVED, not predicted. Editing them by hand to
+  # make a failing test pass is reward hacking (see READ-ONLY above).
+  #
+  # Aliases are NOT a licence to invent: "EM induction" and "Electromagnetic
+  # induction" must resolve to ONE node (expect.no_duplicates) — that is the
+  # near-duplicate bait, and it is the point.
+  #
+  # ⚠️ KNOWN TENSION: `concepts.required` vs `no_duplicates`.
+  # Both independent physics derivations (2026-07-15) flagged that this concept
+  # set is not cleanly distinct:
+  #   - "Electromagnetic induction" and "Faraday's law" substantially overlap —
+  #     many textbooks title the chapter "Faraday's Law of Induction". One
+  #     derivation: they may be ONE concept split in two, and if you reject the
+  #     bare-phenomenon reading, induction should merge INTO Faraday.
+  #   - "Lenz's law" and "Faraday's law" are the least distinct pair in the set —
+  #     Lenz is not a separate law, it IS the sign of Faraday's.
+  # So a GOOD deduper might legitimately merge pairs this file requires to be
+  # distinct, failing `concepts.required`; while keeping them distinct might trip
+  # `no_duplicates` on cosine. The benchmark can contradict itself here.
+  # This transcript deliberately introduces them in separate sessions (s0 = what
+  # induction is; s1 = Faraday's law) to make the split defensible — but if
+  # calibration shows the extractor merging them, THAT IS NOT NECESSARILY A BUG.
+  # Resolve it with evidence from the calibration run, not by assertion.
+  #
+  # Also flagged and deliberately NOT added: an `EMF` node. One derivation argues
+  # it's the missing intermediate that separates Faraday's law from Ohm's law, and
+  # this transcript mentions EMF constantly — so the extractor will very likely
+  # mint it. It is not in `required` because the lesson of the edge cross-check is:
+  # DO NOT ASSERT WHAT YOU HAVEN'T VERIFIED. Add it after calibration if it shows
+  # up. Same for `Mutual inductance` (flagged as the missing step between
+  # Faraday's law and Transformer).
+  #
+  # CALIBRATED from runs a2b4c404 + b060e838 (gpt-oss-120b @ temp 0, frozen input).
+  # Matching is case-insensitive substring, so pure case drift needs no alias.
+  #
+  # What the two runs actually showed:
+  #   - Drift is overwhelmingly CASE ('Magnetic flux'/'magnetic flux',
+  #     'transformers'/'Transformers') — already handled, no alias needed.
+  #   - Stable across BOTH runs: 'EM induction', "Faraday's law", "Ohm's law",
+  #     'pass electromagnetism midterm', 'short bullet-point answers'.
+  #   - Genuinely unstable: the induction umbrella ('Electromagnetic induction' vs
+  #     'electromagnetic induction' vs 'EM induction') — which is the near-duplicate
+  #     bait doing its job, not an alias problem.
+  #
+  # calibrated_from: [a2b4c404, b060e838]
+  #
+  # ⚠️ RE-CALIBRATE ON ANY MODEL CHANGE. These record what THIS extractor emits.
+  # Switching to Qwen/DashScope invalidates them, and a stale alias makes every
+  # identity-keyed check fail for the wrong reason.
+  concepts:
+    - label: Ohm's law
+      aliases: [Ohms law, Ohm law]
+    - label: Electromagnetic induction
+      # Both surface forms observed; they must resolve to ONE node. Two matches
+      # here is the near-duplicate bait firing, and it has fired on every run.
+      aliases: [EM induction, electromagnetic induction]
+    - label: Magnetic flux
+      # Dropped 'flux' and 'Φ' — both far too generic for substring matching.
+      # 'flux' matched 'EMF from flux change' (b060e838) and 'flux change'
+      # (a2b4c404), neither of which is a duplicate of magnetic flux. That was a
+      # false positive manufactured by my own alias, exactly the over-broad-alias
+      # risk documented in checks/_match.py.
+      aliases: [magnetic flux]
+    - label: Faraday's law
+      aliases: [Faraday law, Faradays law]
+    - label: Lenz's law
+      # "Lenz's law (minus sign)" (b060e838) matches on substring already — the
+      # extractor folding 'minus sign' into the concept is GOOD behaviour, not drift.
+      aliases: [Lenz law, Lenzs law]
+    - label: Transformer
+      aliases: [Transformers]
+
+  # -- Prerequisite structure (the authored ground truth) -------------------
+  #
+  # Read "A → B" as: A is a prerequisite of B — B cannot be correctly stated or
+  # understood without A. NOT "A is usually taught first" and NOT "A relates to B".
+  #
+  # ── PROVENANCE ──────────────────────────────────────────────────────────────
+  # Cross-checked 2026-07-15 by two independent derivations that were NOT shown
+  # the draft edges (to avoid anchoring). Of the four originally authored, only
+  # ONE survived unanimously. Kept edges require BOTH derivations to agree.
+  # Anything either one contested is documented below but NOT asserted.
+  #
+  # This block is deliberately tiny. A benchmark with two correct edges is worth
+  # more than one with four where two are wrong — a wrong edge here doesn't just
+  # fail to catch the bug, it actively trains the fix toward reproducing the
+  # error. Grow this list only with evidence, never to "get more coverage".
+  #
+  # Extra edges the extractor invents are NOT failed (too strict for now); only
+  # missing `required` and present `forbidden` are.
+  edges:
+    required:
+      # UNANIMOUS. Faraday's law IS ε = −dΦ/dt — the quantity being differentiated
+      # is flux, so no statement of the law survives removing the concept.
+      - [Magnetic flux, Faraday's law, prerequisite]
+
+      # UNANIMOUS. Vs/Vp = Ns/Np is Faraday applied twice to a shared core flux,
+      # then divided. The turns ratio IS that division. And "why no DC
+      # transformer" is unstatable except as dΦ/dt = 0 ⟹ EMF = 0.
+      - [Faraday's law, Transformer, prerequisite]
+
+    # Reversals of the required edges ONLY. Catches direction churn — keeper.py:191
+    # adopts the proposal's direction on upgrade, so a later wrong proposal can
+    # silently flip a settled edge. Any of these present = FAIL.
+    #
+    # ⚠️ Do NOT add a reversal here unless its forward edge is in `required` and
+    # unanimous. An earlier draft listed [Lenz's law, Faraday's law] as forbidden;
+    # one derivation argued that direction is MORE defensible than the forward one.
+    # That would have failed a CORRECT extraction and driven a fix-loop to break
+    # working code. Forbidding a contested direction is worse than forbidding
+    # nothing.
+    forbidden:
+      # Φ = ∫B·dA is a static surface integral — well-defined with zero induction
+      # anywhere in the problem. Flux needs B and a surface; not time, EMF, or a
+      # circuit.
+      - [Faraday's law, Magnetic flux, prerequisite]
+      # The transformer is the canonical classroom demo of Faraday's law, which
+      # makes this reversal tempting. Being the best illustration of a law is not
+      # being a prerequisite of it: Faraday's law is stated over an arbitrary
+      # surface with no reference to any device, core, or winding.
+      - [Transformer, Faraday's law, prerequisite]
+
+    # ── CONTESTED — deliberately NOT asserted in either direction ──────────────
+    # Documented so nobody "helpfully" adds them later. Each was rejected by at
+    # least one independent derivation. If the extractor emits any of these, that
+    # is NOT a failure — it's a defensible reading.
+    #
+    #   Lenz's law ↔ Faraday's law
+    #     THE fault line. Lenz's law is not a separate law — it IS the minus sign
+    #     in Faraday's. Griffiths: the sign is bookkeeping that falls out of
+    #     Maxwell once orientation is fixed, so Lenz is a downstream mnemonic.
+    #     Halliday: Lenz is an independent energy-conservation principle that
+    #     EXPLAINS why the sign is negative, so it's a lateral constraint. "A
+    #     framework choice, not a fact about nature." Any edge here encodes a
+    #     textbook's stance. Note |ε| = |dΦ/dt| is fully statable with zero Lenz
+    #     content, which is why Faraday → Lenz fails the strict bar. The real
+    #     relation is part_of, not prerequisite.
+    #
+    #   Magnetic flux → Electromagnetic induction
+    #     Split. One: the only correct GENERAL statement of induction is "changing
+    #     flux induces EMF" — the flux-free version fails for a stationary coil in
+    #     a growing solenoid field. Two: induction is the bare empirical phenomenon
+    #     ("move a magnet, the galvanometer deflects") and is statable
+    #     pre-quantitatively — Faraday had the phenomenon in 1831 before the law.
+    #     Turns on what "electromagnetic induction" denotes.
+    #
+    #   Electromagnetic induction → Faraday's law
+    #     Asserted by one derivation (the law's own statement contains "induced",
+    #     so the referent must precede the quantity). The other treats it as
+    #     part_of (induction is the phenomenon; Faraday's law is it, stated
+    #     precisely) and warns the pair may be one concept split in two.
+    #
+    #   Ohm's law → anything
+    #     BOTH derivations: Ohm's law is ISOLATED in this concept set, and both
+    #     volunteered it unprompted. It's a constitutive relation about conduction
+    #     in matter (J = σE) — Faraday's law is a field law that holds in vacuum
+    #     where Ohm's is vacuous. Faraday delivers an EMF, not a current; Ohm is a
+    #     separate claim invoked afterwards. The near-miss: Lenz is usually phrased
+    #     "the induced CURRENT opposes…", and current-from-EMF is Ohm. But that's
+    #     phrasing — Lenz holds in an open circuit and in a superconducting loop,
+    #     where Ohm's law is respectively inapplicable and degenerate. This is
+    #     load-bearing for THIS transcript: session 2's correction turns on exactly
+    #     that superconducting-loop argument.
+    #     If Ohm's law shows up isolated in the graph, that is CORRECT, not a bug.
+
+  # -- Mastery arcs ---------------------------------------------------------
+  mastery:
+    # Demonstrated correctly in s0 turn 1, never re-taught, explicitly skipped in
+    # the s2 review list.
+    - concept: Ohm's law
+      after_session: 0
+      min: 0.6
+    # THE KNOWLEDGE-UPDATE CHECK. The misconception is stated in s1 and repeated
+    # in s2 Q3, then corrected. Mastery must be low after s1 and strictly higher
+    # after s2. This is the arc multi-session-em.yaml was built around and never
+    # checked.
+    - concept: Lenz's law
+      after_session: 1
+      max: 0.5
+    - concept: Lenz's law
+      after_session: 2
+      increased_from_session: 1
+
+  # -- Abstention: concepts that must NOT exist -----------------------------
+  # None of these appear anywhere in the transcript. With frozen input the student
+  # cannot drift, so any of these appearing means the EXTRACTOR hallucinated
+  # curriculum from its own weights.
+  #
+  # Every label below was produced by the degenerate live run `edb608f6` on a
+  # scenario whose intents never mentioned them. This check is the regression
+  # guard for that entire class.
+  abstention:
+    - AC Circuits
+    - RLC Damping
+    - LC Oscillations
+    - Resonance in AC Circuits
+    - Impedance Matching
+    - Inductive reactance
+    - Mutual inductance
+    - Leakage inductance
+    - Maxwell's Equations
+    - Transient Response
+
+  # -- Preferences and goals ------------------------------------------------
+  preferences:
+    required:
+      # Stated once, in s0 turn 1, and honoured throughout.
+      - Short bullet-point answers
+    # A durable preference is restated or explicitly framed as a preference.
+    # "give me a hard one, don't go easy" (s2 turn 1) is a TRANSIENT REQUEST and
+    # must not be minted as a preference. This is the direct analogue of the
+    # observed `Monster Problems` / `No Panic Needed` / `Think Like a Physicist`
+    # noise nodes. _resolve has no reject path today, so this is expected to FAIL
+    # until the extraction prompt distinguishes durable from transient.
+    forbidden:
+      - Hard problems
+      - Challenging questions
+      - No easy questions
+    # STRICT: the learner states exactly ONE durable preference (s0 turn 1). Any
+    # second live preference is a transient request that got minted.
+    #
+    # This is here because `forbidden` above DEMONSTRABLY MISSED IT: 2 of the 5 runs
+    # in variance-em-frozen-v1.md minted 'hard questions', which matches none of the
+    # three forbidden literals. Enumeration can only name phrasings someone already
+    # saw; the extractor picks a new one. A count needs no prediction.
+    max: 1
+  goals:
+    required:
+      # CALIBRATED: was "Pass the electromagnetism midterm". Both runs emitted
+      # 'pass electromagnetism midterm' (no "the"), so substring matching missed it
+      # and `preferences` reported a missing goal that was sitting in the graph.
+      # A textbook false negative from a predicted-rather-than-observed label — and
+      # exactly what the `unmatched labels in graph:` line exists to surface. It
+      # named the culprit on the first run.
+      - pass electromagnetism midterm
+    # STRICT: one goal is stated (s0 turn 1) and no other, so every extra goal node
+    # is over-extraction by construction. Observed 3-5 live goals across 5 identical
+    # runs — including 'midterm preparation' (a semantic duplicate of the real goal,
+    # which dedup should have merged) and 'Learn Faraday's law' (a topic, not a
+    # goal). The spurious set differed on every run, so no forbidden list can cover
+    # it.
+    max: 1
+
+  # -- Over-extraction ------------------------------------------------------
+  # GENEROUS on purpose: 6 concepts are expected, but 'EMF', 'Superconducting ring'
+  # and friends ARE in the transcript and are not wrong — only too granular. This
+  # asserts proportion, not a curriculum, so a correct-but-detailed extractor still
+  # passes. Observed 11-15 live concepts across 5 identical runs.
+  #
+  # This is the one concept assertion that CANNOT be dodged by relabelling. Identity
+  # matching is equality against authored aliases, so a duplicate wearing a label
+  # nobody predicted is invisible as a duplicate (tests/eval/test_checks_frozen.py::
+  # test_concepts_blind_to_unaliased_variant pins that hole). A count doesn't care
+  # what anything is called.
+  max_concepts: 9
+
+  # -- Dedup ----------------------------------------------------------------
+  # Absolute, not a rate. The current `dedup` check is a rate over C(n,2) pairs —
+  # at 28 nodes that is 378 pairs, so its 0.05 threshold tolerates 18 duplicate
+  # pairs. It has never been shown to fail on a real duplicate, and given it is
+  # 0-for-7 on the observed ones it probably cannot.
+  no_duplicates: true
+
+# -- Recall probes (reuse the existing check) --------------------------------
+probes:
+  - query: "what should I review before my electromagnetism midterm?"
+    expect_nodes: [Lenz's law, Transformer]
+    mastered_not_expected: [Ohm's law]
+  - query: "why does the induced current oppose the magnet?"
+    expect_nodes: [Lenz's law, Magnetic flux]
+  - query: "how do transformers work?"
+    expect_nodes: [Transformer, Electromagnetic induction]
+
+checks:
+  - recall_probes
+  - integrity
+  - edges              # (b)3, (b)4. Nothing checked relations before this.
+  - abstention         # hallucinated curriculum.
+  - knowledge_update   # misconception → correction.
+  - concepts           # required concepts present, absolute + cross-type dedup.
+  - preferences        # durable preferences/goals, and transient-request rejection.
+  # Deliberately omitted: `dedup` (superseded by expect.no_duplicates),
+  # `behavior` (needs the live tutor — not this fixture's job).
+  #
+  # ── REQUIRED OF EVERY NEW CHECK: report unmatched labels ────────────────────
+  # A failure message must distinguish "the code is broken" from "the alias list
+  # is stale," or an iterating agent cannot act on it correctly. Every check that
+  # keys on concept identity MUST list graph labels that matched no expected
+  # concept:
+  #
+  #   FAIL edges: missing [Magnetic flux → Electromagnetic induction]
+  #     unmatched labels in graph: ['Electromagnetic Induction (EM)']
+  #
+  # That second line is the whole trick. It lets a human (or the loop's own LLM,
+  # reading the failure text) tell an alias gap from a real regression — WITHOUT
+  # paying for an LLM judge inside the check, and without the check sharing a
+  # blind spot with the LLM-driven code it is testing.
+  #
+  # If an LLM matcher ever does prove necessary (only if calibration shows labels
+  # are still unstable at temp 0), it must perform a BIJECTION check — "map each
+  # produced label to at most one expected concept; report unmapped labels and
+  # multiply-mapped concepts" — NOT a presence check. "Is concept X present?"
+  # answers yes while two duplicate nodes for X sit in the graph, masking the
+  # exact bug this fixture hunts.

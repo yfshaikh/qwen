@@ -7,6 +7,7 @@ adapter later — see build_llm() and the spec's provider-seam section.
 
 from __future__ import annotations
 
+from collections.abc import AsyncIterator
 from dataclasses import asdict
 from typing import Any, Protocol
 
@@ -14,15 +15,65 @@ from engram.core.models import Completion, Message
 
 
 class _AsyncChatClient(Protocol):
-    chat: Any
+    @property
+    def chat(self) -> Any: ...
+
+
+def _failed_generation(exc: BaseException) -> str | None:
+    """Groq's json_object mode validates server-side: if the model emits invalid
+    JSON it raises 400 `json_validate_failed` carrying the partial text, where
+    OpenAI would just return that text. Return the partial, or None if `exc` is
+    some other error.
+
+    Without this the provider's 400 escapes `complete()` and kills the whole run —
+    bypassing the repair prompt in Keeper._extract, which exists precisely to
+    re-ask when the extractor returns unusable JSON. Malformed output is the
+    extractor having a bad day, not an outage. Observed on gpt-oss-120b: one run
+    truncated mid-string, another returned an empty completion.
+    """
+    body = getattr(exc, "body", None)
+    if not isinstance(body, dict):
+        return None
+    # BOTH shapes, because the SDK's is not what its own error message shows:
+    # AsyncOpenAI._make_status_error does `data = body.get("error", body)`, so
+    # exc.body is the INNER error dict — while str(exc) still prints the full
+    # {'error': {...}} envelope it was built from. Reading the message and
+    # believing it is how the first version of this shipped broken: it checked
+    # body["error"], got None on every real 400, re-raised, and its unit tests
+    # passed because they fabricated the envelope the message implied.
+    inner = body.get("error")
+    err = inner if isinstance(inner, dict) else body
+    if err.get("code") != "json_validate_failed":
+        return None
+    # "" is a real answer here (the empty-completion case) — it must reach the
+    # parser and raise ExtractionError, so don't collapse it to None.
+    got = err.get("failed_generation")
+    return got if isinstance(got, str) else ""
+
+
+def _is_rate_limit(exc: BaseException) -> bool:
+    return getattr(exc, "status_code", None) == 429
 
 
 class OpenAICompatibleLLM:
     """Implements core.ports.LLMPort against any OpenAI-compatible chat API."""
 
-    def __init__(self, client: _AsyncChatClient, role_to_model: dict[str, str]) -> None:
+    def __init__(self, client: _AsyncChatClient, role_to_model: dict[str, str],
+                 role_to_temperature: dict[str, float] | None = None,
+                 fallback_client: _AsyncChatClient | None = None) -> None:
         self._client = client
         self._role_to_model = role_to_model
+        # Absent role -> omit `temperature` entirely and take the provider
+        # default. Not the same as passing 0.0, and not the same as passing 1.0 —
+        # providers differ on their default, so we don't guess one.
+        self._role_to_temperature = role_to_temperature or {}
+        # FALLBACK ONLY — used when the primary exhausts its own retries on a
+        # 429 (e.g. a daily token cap, which no amount of backoff outlives).
+        # Never load-balanced, never primary: eval runs are calibrated against
+        # the primary provider's models, and a silent provider switch would be
+        # a variance source. complete() only; streams stay primary-only (a
+        # mid-stream provider swap can't resume cleanly anyway).
+        self._fallback = fallback_client
 
     async def complete(
         self,
@@ -35,15 +86,68 @@ class OpenAICompatibleLLM:
             "model": model,
             "messages": [asdict(m) for m in messages],
         }
+        temperature = self._role_to_temperature.get(role)
+        if temperature is not None:
+            kwargs["temperature"] = temperature
         if schema is not None:
             # OpenAI-compatible json_object mode; the prompt itself must describe
             # the schema for the model. (Structured parsing lands in Phase 2.)
             kwargs["response_format"] = {"type": "json_object"}
+        if role == "reflector":
+            # The reflector prompt demands a single "yes"/"no" token (see
+            # keeper.py:_reflector_confirm), so a small cap is safe. Every other
+            # role is left at the provider default — capping extractor/tutor/
+            # student/judge output risks truncating a full JSON graph or a
+            # transcript, which is NOT safe (see Task A6 scope note).
+            #
+            # MEASURED NO-OP on the current stack: eval run 27b8c5a7 recorded
+            # 1773 reflector completion_tokens under this cap (~90-160/call over
+            # 11 confirmed merges). qwen3.7-max is a thinking model — this bounds
+            # only the visible answer ("yes" fits), while thinking tokens bill
+            # unclamped. Kept because it costs nothing and does clamp providers
+            # that cap total output; do NOT cite it as a live token saving. The
+            # reflector's real spend is thinking tokens — batching the confirms
+            # (Phase C) is what would move that number.
+            kwargs["max_tokens"] = 4
 
-        resp = await self._client.chat.completions.create(**kwargs)
+        try:
+            resp = await self._client.chat.completions.create(**kwargs)
+        except Exception as exc:
+            partial = _failed_generation(exc)
+            if partial is not None:
+                return Completion(text=partial, usage={}, model=model)
+            if self._fallback is None or not _is_rate_limit(exc):
+                raise
+            # Cerebras serves bare model names where OpenRouter/Groq use
+            # "vendor/model"; strip the prefix. If the fallback lacks the
+            # model it errors loudly — better than silently answering with a
+            # different model.
+            kwargs["model"] = model.rsplit("/", 1)[-1]
+            try:
+                resp = await self._fallback.chat.completions.create(**kwargs)
+            except Exception as fexc:
+                partial = _failed_generation(fexc)
+                if partial is None:
+                    raise
+                return Completion(text=partial, usage={}, model=kwargs["model"])
         text = resp.choices[0].message.content if resp.choices else None
         usage = self._usage_dict(getattr(resp, "usage", None))
         return Completion(text=text, usage=usage, model=getattr(resp, "model", model))
+
+    async def stream(self, role: str, messages: list[Message]) -> AsyncIterator[str]:
+        kwargs: dict[str, Any] = {
+            "model": self._resolve(role),
+            "messages": [asdict(m) for m in messages],
+            "stream": True,
+        }
+        temperature = self._role_to_temperature.get(role)
+        if temperature is not None:
+            kwargs["temperature"] = temperature
+        resp = await self._client.chat.completions.create(**kwargs)
+        async for chunk in resp:
+            delta = chunk.choices[0].delta.content if chunk.choices else None
+            if delta:
+                yield delta
 
     def _resolve(self, role: str) -> str:
         try:
@@ -73,10 +177,26 @@ def build_llm(settings: Any) -> OpenAICompatibleLLM:
     client = AsyncOpenAI(
         api_key=settings.openrouter_api_key,
         base_url=settings.openrouter_base_url,
+        # Default is 2, whose backoff tops out well under the ~5s Groq's free tier
+        # asks for; a 429 then surfaces as a failed RUN, which in an eval reads as a
+        # result rather than a hiccup. The SDK honours the Retry-After header, so
+        # this is mostly a raised ceiling on how long it will keep honouring it.
+        max_retries=5,
     )
-    role_to_model = {
-        "tutor": settings.model_for("tutor"),
-        "extractor": settings.model_for("extractor"),
-        "reflector": settings.model_for("reflector"),
+    fallback = None
+    if getattr(settings, "cerebras_api_key", None):
+        fallback = AsyncOpenAI(
+            api_key=settings.cerebras_api_key,
+            base_url=settings.cerebras_base_url,
+            max_retries=2,
+        )
+    roles = ("tutor", "extractor", "reflector", "student", "judge")
+    role_to_model = {r: settings.model_for(r) for r in roles}
+    # Only roles with a configured temperature land in the map; the rest keep the
+    # provider default (see OpenAICompatibleLLM.__init__).
+    role_to_temperature = {
+        r: t for r in roles if (t := settings.temperature_for(r)) is not None
     }
-    return OpenAICompatibleLLM(client=client, role_to_model=role_to_model)
+    return OpenAICompatibleLLM(client=client, role_to_model=role_to_model,
+                               role_to_temperature=role_to_temperature,
+                               fallback_client=fallback)

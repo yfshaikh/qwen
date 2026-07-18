@@ -1,0 +1,27 @@
+name: ci
+
+on:
+  push:
+    branches: [main, engram-poc]
+  pull_request:
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install -e ".[dev]"
+      - run: ruff check src tests tools
+      - run: mypy
+      # Offline suite only: live-DB tests (tests/test_storage_*.py and the one
+      # live facade loop) need the Docker pgvector container + migrations.
+      - run: >
+          pytest tests -q
+          --ignore=tests/test_storage_postgres.py
+          --ignore=tests/test_storage_audit.py
+          --ignore=tests/test_storage_keeper.py
+          --ignore=tests/test_storage_voice.py
+          --deselect "tests/test_engram_facade.py::test_ingest_consolidate_recall_loop_live"

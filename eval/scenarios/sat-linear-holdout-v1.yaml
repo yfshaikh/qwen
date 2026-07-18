@@ -1,0 +1,440 @@
+# Frozen benchmark case #2 — SAT linear equations, 3 sessions. THE HOLDOUT.
+#
+# WHY THIS EXISTS — IT IS NOT "ANOTHER TEST"
+# em-frozen-v1 is the scenario an agent iterates against. This one exists to
+# answer a question that scenario structurally cannot: did Engram get better, or
+# did it get better AT EM-FROZEN-V1?
+#
+# "Make the checks pass" is satisfiable two ways. One is fixing dedup. The other
+# is tuning the extraction prompt to this one physics transcript — dropping in
+# "electromagnetic induction" as a label hint, hard-coding EM phrasing, teaching
+# the extractor this fixture's answers. That path needs NO edit to eval/, so
+# test_benchmark_integrity's digest never moves and nothing goes red. You get a
+# green benchmark and an Engram that is no better on the SAT site.
+#
+# So this file is a different domain on purpose. Nothing here is physics; the
+# vocabulary, the concepts, and the prerequisite shape share nothing with case #1.
+# A fix that generalises passes both. A fix that memorised case #1 passes one.
+#
+# ─────────────────────────────────────────────────────────────────────────────
+# HOW TO USE IT — DO NOT HAND THIS TO THE FIX-LOOP
+# ─────────────────────────────────────────────────────────────────────────────
+# The agent iterating on Engram runs em-frozen-v1 ONLY. A human runs this one,
+# afterwards, to decide whether to believe the result. Its value is exactly its
+# unfamiliarity: a holdout you optimise against is not a holdout, it is a second
+# training set, and you would be left with no way to detect overfitting at all.
+#
+# Caveat worth naming: an agent with repo access can READ this file, so this is
+# weaker than a true holdout. It is not nothing — overfitting to a fixture you
+# never run against and never see scored takes deliberate effort rather than
+# gradient-following — but if you want the real thing, move this file out of the
+# working tree and keep it wherever you keep the answer key.
+#
+# ─────────────────────────────────────────────────────────────────────────────
+# THIS FILE IS READ-ONLY TO AUTOMATION
+# ─────────────────────────────────────────────────────────────────────────────
+# Same rule as case #1. "Add an alias until it passes" and "relax the expected
+# edges" are the cheapest paths to green and an optimiser will find them. Changes
+# to the transcript or to `expect:` are a human decision.
+#
+# ─────────────────────────────────────────────────────────────────────────────
+# TEMPERATURE
+# ─────────────────────────────────────────────────────────────────────────────
+# Extractor MUST run at temperature=0 (ENGRAM_TEMPERATURE_EXTRACTOR=0), same as
+# case #1. With the transcript frozen, sampling is the only remaining variance.
+# Not bit-deterministic on any provider; close enough to gate on.
+#
+# ─────────────────────────────────────────────────────────────────────────────
+# ⚠️ STATUS: ALIASES ARE UNCALIBRATED — THE FIRST RUN IS NOT A VERDICT
+# ─────────────────────────────────────────────────────────────────────────────
+# Every alias below is a GUESS about what the extractor will emit. Case #1 taught
+# this the expensive way: ground truth said "Pass the electromagnetism midterm",
+# every run emitted 'pass electromagnetism midterm', and `preferences` reported a
+# missing goal that was sitting in the graph the whole time.
+#
+# So: run this ONCE, read `unmatched labels in graph:`, and fix the aliases to the
+# labels a CORRECT extractor actually produced. Only then does a red here mean
+# anything. Calibrating is not cheating — writing down what the extractor calls a
+# concept is not the same as widening what counts as correct. Adding an alias to
+# make a KNOWN DUPLICATE stop failing is cheating, and it is the line to watch.
+
+id: sat-linear-holdout-v1
+description: >
+  Hand-authored, frozen. A student fluent in solving single linear equations
+  learns slope, slope-intercept form, systems, and parallel/perpendicular lines
+  over three sessions. Holds a slope misconception (the slope is the constant
+  term, not the coefficient of x) through sessions 0-1; corrected in session 2.
+
+# Descriptive only — with a frozen transcript nothing reads these to generate
+# turns. Kept for parity with case #1.
+persona: >
+  A high-school junior three months out from the SAT. Fluent at solving single
+  linear equations. Asked for worked examples before rules once, in session 0,
+  and never again.
+hidden_state:
+  mastered: [Solving linear equations]
+  misconception:
+    concept: Slope
+    wrong: "the slope is the constant term (b), not the coefficient of x (m)"
+    corrected_in_session: 2
+  preference: "worked example first, then the rule"
+  goal: "raise SAT math score to 700"
+
+# --------------------------------------------------------------------------
+# THE FROZEN TRANSCRIPT
+# --------------------------------------------------------------------------
+# Every turn is deliberate. Two rules learned from case #1:
+#   1. A turn testing mastery must be UNAMBIGUOUS about it. Case #1's Ohm's law
+#      turn first read "...gives 3 A, right?" and the extractor filed it as
+#      `asked_about` (inert) — defensible, since the learner was asking. Mastery
+#      stayed None and the check failed for a reason that was about phrasing, not
+#      the Keeper. Demonstrations here state, they never ask.
+#   2. No turn may mention any `expect.abstention` topic, even in passing. Those
+#      assert the extractor invents nothing; one stray "quadratic" makes a
+#      hallucination check score a memory test instead.
+sessions:
+  # ---- Session 0 (day 0) — fluency, preference, goal, first contact ---------
+  - transcript:
+      - role: user
+        content: |-
+          Setting expectations: solving single linear equations is automatic for me.
+          3x + 7 = 22, so 3x = 15, so x = 5. I get those right every time.
+          I learn best from a worked example first, then the rule.
+          Goal is raising my SAT math score to 700 by October.
+      - role: assistant
+        content: |-
+          Correct, and cleanly done — subtract, divide, check.
+          Worked-example-first it is.
+          700 by October is realistic. Let's find what's actually costing you points.
+
+      - role: user
+        content: "Start with slope. What is it really?"
+      - role: assistant
+        content: |-
+          Example first. Take the points (1, 2) and (3, 8).
+          Going left to right: y climbs by 6, x moves by 2. Slope = 6/2 = 3.
+          The rule: slope = rise/run = (y2 - y1)/(x2 - x1). It is the rate the line
+          climbs. Positive climbs, negative falls, zero is flat.
+
+      - role: user
+        content: "Where does that show up in an equation?"
+      - role: assistant
+        content: |-
+          Example: y = 3x + 2. From (0, 2), step 1 right and 3 up, every time.
+          The rule: slope-intercept form is y = mx + b. The m is the slope you just
+          learned; the b is the y-value where the line crosses the y-axis.
+          Everything in this form is read off the slope, so slope comes first.
+
+      - role: user
+        content: "And when the test gives me two equations at once?"
+      - role: assistant
+        content: |-
+          Example: y = 2x + 1 and y = -x + 7. Set them equal: 2x + 1 = -x + 7, so
+          3x = 6, x = 2, then y = 5. The pair meets at (2, 5).
+          The rule: that is a system of linear equations. Notice what you actually
+          did — you turned it into one single linear equation and solved it. Your
+          existing fluency IS the method here.
+
+      - role: user
+        content: "What about lines that never meet?"
+      - role: assistant
+        content: |-
+          Example: y = 4x + 1 and y = 4x - 6. Same climb, different starting point —
+          they run alongside forever and never touch.
+          The rule: parallel lines have equal slopes. Perpendicular lines have
+          slopes that are negative reciprocals: 4 and -1/4. Both facts are
+          comparisons of slope, so it all rests on that one idea.
+
+  # ---- Session 1 (day 5) — THE MISCONCEPTION -------------------------------
+  # The learner states a wrong belief and the tutor corrects it. This must extract
+  # as `quiz_wrong` on Slope (a stated belief the tutor corrected IS a
+  # misconception — see _KIND_GUIDE in extraction.py). If it lands as `note` or
+  # `asked_about`, both inert, mastery never moves and knowledge_update goes red.
+  # That is the check working, not the fixture failing.
+  - gap_days: 5
+    transcript:
+      - role: user
+        content: |-
+          I worked through the homework. In y = 2x + 5 the slope is 5 — the number
+          sitting on its own at the end. I used that all the way through.
+      - role: assistant
+        content: |-
+          That is wrong, and it will cost you points, so let's kill it now.
+          In y = 2x + 5 the slope is 2, not 5.
+          The slope is the number multiplying x. The lone number is the y-intercept.
+          Check it: at x = 0, y = 5. At x = 1, y = 7. The line climbed by 2 when x
+          moved by 1 — that climb is the slope. 5 is where it started, not how fast
+          it rises.
+
+      - role: user
+        content: "So in y = -3x + 4, which one is the slope?"
+      - role: assistant
+        content: |-
+          You tell me — that is the whole skill. Look for what multiplies x.
+          I want the slope and the y-intercept, separately.
+
+      - role: user
+        content: "I want to say -3, but the minus sign makes me second-guess."
+      - role: assistant
+        content: |-
+          -3 is right, and the minus is information, not a trap: the line falls by 3
+          each step right. The y-intercept is 4.
+          Say it as a sentence: "starts at 4, falls 3 per step."
+
+      - role: user
+        content: "Does that change how I do the two-equation ones?"
+      - role: assistant
+        content: |-
+          No — same move as before. Set the two expressions equal, collapse it to one
+          linear equation, solve it. You already own that step.
+          The slope only matters for what the answer MEANS: same slopes never meet,
+          different slopes meet exactly once.
+
+      - role: user
+        content: "Okay. Anything else on reading a line off its equation?"
+      - role: assistant
+        content: |-
+          One habit: name the slope and the intercept out loud before you compute
+          anything. Most errors on this section are misreading the line, not
+          arithmetic.
+
+  # ---- Session 2 (day 12) — THE CORRECTION + a transient request -----------
+  # Two independent things are under test here:
+  #   1. The learner now applies slope correctly and unprompted -> Slope's mastery
+  #      must INCREASE from session 1 (expect.mastery, increased_from_session).
+  #   2. "give me a timed drill, don't go easy" is a TRANSIENT REQUEST, not a
+  #      durable preference. Case #1's analogue got minted as 'hard questions' in
+  #      2 of 5 runs. `_resolve` has no reject path, so this is expected to fail
+  #      until the extraction prompt separates durable from transient.
+  - gap_days: 7
+    transcript:
+      - role: user
+        content: |-
+          Give me a timed drill today, don't go easy on me.
+      - role: assistant
+        content: |-
+          Fine. Clock starts now.
+          Line A: y = -5x + 2. Line B passes through (0, -3) and climbs 5 per step.
+          Slope of each, and do they ever meet?
+
+      - role: user
+        content: |-
+          A has slope -5, that's the number on the x. B has slope 5, starting at -3.
+          Different slopes, so they cross exactly once.
+      - role: assistant
+        content: |-
+          All correct, and quickly. Note what you just did without being told: you
+          read the slope off the coefficient and ignored the constant.
+          That is the exact thing you had backwards last time. It is fixed.
+
+      - role: user
+        content: "Perpendicular though? -5 and 5 look like opposites."
+      - role: assistant
+        content: |-
+          Good instinct, wrong rule — and this one is a classic.
+          Perpendicular needs the negative RECIPROCAL: -5 pairs with +1/5, not +5.
+          -5 and 5 are just opposite signs. They cross, but not at a right angle.
+
+      - role: user
+        content: "Right. And if B had been y = -5x - 3?"
+      - role: assistant
+        content: |-
+          Then both slopes are -5 — parallel, never meet, no solution.
+          Same slope, different intercept, and the system has no answer.
+
+      - role: user
+        content: "What if it were y = -5x + 2 twice?"
+      - role: assistant
+        content: |-
+          Same line written twice. Infinitely many solutions — every point on it
+          works. Worth knowing: the test asks that one on purpose.
+
+      - role: user
+        content: "Good. I feel solid on reading slope now."
+      - role: assistant
+        content: |-
+          You are. Two sessions ago it was the constant; today you took it off the
+          coefficient under time pressure and caught your own sign.
+          Next session: word problems, where they hide the slope in a sentence.
+
+# --------------------------------------------------------------------------
+# GROUND TRUTH
+# --------------------------------------------------------------------------
+# Preference/goal surface forms. Concepts carry aliases inline below; prefs and
+# goals read this top-level map (same normalized-equality matcher). CALIBRATED
+# 2026-07-18 from runs 9fd5e40e/b437feb8/594a91ce (post-fix-#1, Cerebras
+# fallback): both variants emitted identically 3/3 runs. Human-judged same
+# thing: a learning style IS the stated preference; "by October" is the same
+# goal with its deadline attached.
+aliases:
+  Worked example first: [worked-example-first learning style]
+  SAT math score 700: [SAT math score 700 by October]
+
+expect:
+  concepts:
+    # ⚠️ ALIASES ARE GUESSES until a calibration run says otherwise (see header).
+    # CALIBRATED 2026-07-18 (runs 9fd5e40e/b437feb8/594a91ce, ALL post-fix-#1
+    # phrasing, served via the Cerebras 429-fallback): the KNOWN NODES anchor
+    # made the extractor emit 'solving single linear equations' byte-stably,
+    # 3/3 runs. Aliases are additive — Groq's phrasing variants stay valid.
+    - label: Solving linear equations
+      aliases: [solving linear equations, linear equations, solving equations,
+                solving single linear equations]
+    - label: Slope
+      aliases: [slope, rise over run, rate of change]
+    - label: Slope-intercept form
+      aliases: [slope intercept form, y = mx + b, y=mx+b]
+    - label: Systems of linear equations
+      aliases: [systems of equations, system of linear equations, systems of linear equations]
+    # CALIBRATED (authoring bug, not an extractor bug). This was ONE concept,
+    # 'Parallel and perpendicular lines', with 'parallel lines' and 'perpendicular
+    # lines' as its aliases — so the extractor emitting them as two nodes, which is
+    # correct, was scored as a duplicate. Ground truth was wrong, not the graph.
+    # Exactly case #1's over-broad `flux` alias in a new costume: an alias that
+    # names a PART of a concept makes every sibling look like the same node.
+    - label: Parallel lines
+      aliases: [parallel lines]
+    - label: Perpendicular lines
+      # 'perpendicular slopes' was here and was REMOVED — the same authoring bug as
+      # above, one layer down. Run 00f22c7a produced both 'perpendicular lines' and
+      # 'perpendicular slopes'; aliasing the second onto the first MANUFACTURES a
+      # duplicate rather than detecting one, and whether they are one concept or two
+      # is genuinely arguable. Ground truth takes only what is not arguable, so it
+      # stays unmatched and visible in `unmatched labels in graph:` for a human to
+      # judge. An alias must name the SAME concept, never a related or narrower one.
+      aliases: [perpendicular lines]
+
+  # ⚠️ HUMAN REVIEW REQUIRED — authored ground truth. If a direction here is
+  # wrong, the benchmark bakes in the bug it exists to catch.
+  #
+  # DELIBERATELY SMALL. Case #1 authored 4 required edges; two independent
+  # physics cross-checks rejected half of them, and one of the FORBIDDEN entries
+  # was argued to be more defensible than the required edge it mirrored. A
+  # benchmark that fails a correct extractor is worse than no benchmark. Only
+  # relations that survive "would every teacher of this subject agree?" are here.
+  edges:
+    required:
+      # m IS the slope. You cannot read y = mx + b without already knowing what
+      # slope means; the form is notation FOR the concept. The tutor says so
+      # explicitly in s0: "Everything in this form is read off the slope."
+      - [Slope, Slope-intercept form, prerequisite]
+      # Solving a system reduces to solving one linear equation — the tutor makes
+      # the dependency explicit in s0: "you turned it into one single linear
+      # equation... Your existing fluency IS the method here."
+      - [Solving linear equations, Systems of linear equations, prerequisite]
+    forbidden:
+      # Both are the required edges reversed. `forbidden` is not decoration: it
+      # catches DIRECTION CHURN (keeper.py:191 adopts the proposal's direction on
+      # upgrade, so a later wrong-direction proposal silently flips a settled
+      # edge). A required-only check passes with both directions in the graph.
+      - [Slope-intercept form, Slope, prerequisite]
+      - [Systems of linear equations, Solving linear equations, prerequisite]
+    # DELIBERATELY OMITTED: [Slope, Parallel lines] and [Slope, Perpendicular
+    # lines]. Defensible
+    # — both rules are slope comparisons — but "defensible" is the standard that
+    # produced case #1's retracted edges. Left out rather than argued for. Extra
+    # edges are not failed, so a correct extractor emitting it loses nothing.
+
+  mastery:
+    # Stated as fact and demonstrated with a worked answer in s0 turn 1. If this
+    # lands as an inert kind (`note`/`asked_about`), mastery stays None and this
+    # goes red — which is the check working. See _KIND_GUIDE in extraction.py.
+    - concept: Solving linear equations
+      after_session: 0
+      min: 0.6
+    # The misconception is stated in s1 and corrected by the tutor in the same
+    # turn: `quiz_wrong` on Slope. Mastery must be LOW, not absent.
+    - concept: Slope
+      after_session: 1
+      max: 0.5
+    # s2: applies slope correctly under time pressure, unprompted. The correction
+    # must reach the graph — this is the arc the whole fixture is built around.
+    - concept: Slope
+      after_session: 2
+      increased_from_session: 1
+
+  # Real SAT-math topics that NEVER appear in the transcript, in any form. A live
+  # node matching any of these came from the extractor's own weights, not from the
+  # learner. Matching is containment, so 'Quadratic formula (vertex form)' is
+  # caught too.
+  abstention:
+    - Quadratic formula
+    - Circle equations
+    - Trigonometry
+    - Standard deviation
+    - Exponential growth
+    - Complex numbers
+    - Polynomial division
+    - Function transformations
+    - Scatterplots
+    - Absolute value inequalities
+
+  preferences:
+    required:
+      # Stated once, s0 turn 1, and honoured by the tutor throughout.
+      - Worked example first
+    forbidden:
+      # s2 turn 1 is a one-off request, not a standing preference. Enumerated
+      # because it is the specific phrasing to watch — but see `max` below: on
+      # case #1 the forbidden list named 'Hard problems' and the extractor emitted
+      # 'hard questions', so the list missed it and 2 of 5 runs passed with the
+      # bug live.
+      - Timed drills
+      - No easy questions
+    # STRICT: exactly one durable preference is stated. A count needs no
+    # prediction, which is why it catches what the list above cannot.
+    max: 1
+
+  goals:
+    required:
+      # CALIBRATED: authored as 'raise SAT math score to 700'; run 00f22c7a emitted
+      # 'SAT math score 700'. Same false-negative as case #1's goal ("Pass the
+      # electromagnetism midterm" vs 'pass electromagnetism midterm') — a predicted
+      # label rather than an observed one. The `unmatched labels in graph:` line
+      # named it on the first run, again.
+      - SAT math score 700
+    # STRICT: one goal, stated once, never another. Case #1 minted 3-5 goal nodes
+    # per run — topics ('Learn Faraday's law') and semantic dupes of the real goal
+    # ('midterm preparation') — and the spurious set differed EVERY run, so no
+    # forbidden list could cover it.
+    max: 1
+
+  # GENEROUS: 6 concepts are expected, and a detailed-but-correct extractor may
+  # legitimately mint 'y-intercept', 'negative reciprocal', 'no solution case'.
+  # Those are real transcript content, only finer-grained than the ground truth —
+  # this asserts proportion, not a curriculum.
+  #
+  # This is the one concept assertion that CANNOT be dodged by relabelling.
+  # Identity is equality against authored aliases, so a duplicate wearing a label
+  # nobody predicted is invisible AS a duplicate (see
+  # tests/eval/test_checks_frozen.py::test_concepts_blind_to_unaliased_variant).
+  # A count does not care what anything is called.
+  # 6 expected + 3 slack, the same ratio as case #1. Raised from 8 only because the
+  # expected count itself went 5 -> 6 when the parallel/perpendicular authoring bug
+  # was fixed — NOT because 14 failed. Run 00f22c7a is over this either way.
+  max_concepts: 9
+
+  no_duplicates: true
+
+probes:
+  - query: "what should I review before the SAT?"
+    expect_nodes: [Slope, Perpendicular lines]
+    # Fluent since s0 and never wrong: surfacing it as review is a failure to use
+    # what the graph knows.
+    mastered_not_expected: [Solving linear equations]
+  - query: "how do I tell if two lines ever cross?"
+    expect_nodes: [Slope, Parallel lines]
+  - query: "how do I read the slope off an equation?"
+    expect_nodes: [Slope, Slope-intercept form]
+
+checks:
+  - concepts
+  - edges
+  - abstention
+  - knowledge_update
+  - preferences
+  - recall_probes
+  - integrity
+  # Deliberately omitted, matching case #1: `dedup` (superseded by
+  # expect.no_duplicates — its C(n,2) denominator tolerates 18 duplicate pairs at
+  # 28 nodes), `importance`, `lifecycle`, `behavior`.

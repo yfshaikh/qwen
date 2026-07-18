@@ -26,3 +26,11 @@ __pycache__/
 
 docs/superpowers
 
+eval/reports/*
+!eval/reports/.gitkeep
+
+eval/runs/*
+!eval/runs/baselines/
+!eval/runs/baselines/**
+
+.superpowers/

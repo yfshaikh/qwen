@@ -1,0 +1,20 @@
+learner_id: alice
+nodes:
+  - key: limits
+    type: concept
+    label: Limits
+    summary: The value a function approaches as input approaches a point.
+    mastery: 0.7
+    salience: 0.9
+    evidence:
+      - kind: quiz_correct
+        content: Correctly evaluated lim x->2 of x^2.
+        importance: 0.8
+  - key: derivatives
+    type: concept
+    label: Derivatives
+    salience: 0.5
+edges:
+  - source: limits
+    target: derivatives
+    type: prerequisite

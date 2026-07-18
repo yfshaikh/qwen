@@ -1,0 +1,4 @@
+recall_seed_k: [2, 4, 8]
+recall_hops: [1, 2]
+recall_w_relevance: [0.3, 0.6]
+recall_default_budget: [150, 400, 800]

@@ -1,0 +1,25 @@
+{
+  "name": "@engram/types",
+  "version": "0.1.0",
+  "description": "Generated TypeScript types for Engram memory_router (and related graph/audit schemas).",
+  "license": "MIT",
+  "types": "./index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./index.d.ts",
+      "default": "./index.d.ts"
+    }
+  },
+  "files": [
+    "index.d.ts",
+    "README.md"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/yfshaikh/qwen.git",
+    "directory": "packages/engram-types"
+  },
+  "scripts": {
+    "generate": "cd ../.. && python tools/export_types.py packages/engram-types/index.d.ts"
+  }
+}

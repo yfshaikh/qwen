@@ -1,0 +1,59 @@
+@import 'tailwindcss';
+
+html,
+body,
+#root {
+  height: 100%;
+  margin: 0;
+}
+
+body {
+  background: #fafafa;
+  color: #18181b;
+  font-family: ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
+  -webkit-font-smoothing: antialiased;
+}
+
+/* React Flow refinements */
+.react-flow__attribution {
+  display: none;
+}
+
+/* New-node flash on consolidate */
+.engram-node-flash {
+  animation: engram-flash 1.6s ease-out;
+  border-radius: 0.75rem;
+}
+@keyframes engram-flash {
+  0% {
+    box-shadow: 0 0 0 0 rgba(99, 102, 241, 0.5);
+  }
+  100% {
+    box-shadow: 0 0 0 16px rgba(99, 102, 241, 0);
+  }
+}
+
+/* Blocked-path highlight (dashboard) */
+.engram-node-highlight {
+  box-shadow: 0 0 0 3px rgb(251 191 36 / 0.9);
+  border-radius: 0.75rem;
+}
+.engram-node-dim {
+  opacity: 0.35;
+}
+
+/* Thin scrollbars */
+.scroll-thin::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+.scroll-thin::-webkit-scrollbar-track {
+  background: transparent;
+}
+.scroll-thin::-webkit-scrollbar-thumb {
+  background: #e4e4e7;
+  border-radius: 9999px;
+}
+.scroll-thin::-webkit-scrollbar-thumb:hover {
+  background: #d4d4d8;
+}
