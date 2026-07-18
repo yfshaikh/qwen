@@ -54,6 +54,16 @@ class OntologyEdge:
     target: str
     type: EdgeType = EdgeType.PREREQUISITE
 
+    def __post_init__(self) -> None:
+        # Coerce strings at the trust boundary. EdgeType subclasses str, so
+        # type="prerequisite" constructs fine, passes validate(), and only
+        # detonates at the first `.type.value` — deep in the seed write on
+        # Postgres, or worse, at graph-read time on adapters that store it
+        # raw (found live in Marfini, where every session's seed died as one
+        # swallowed background warning). EdgeType(...) is a no-op on a real
+        # member and raises ValueError HERE, in the host's own stack, on junk.
+        self.type = EdgeType(self.type)
+
 
 @dataclass(slots=True)
 class ConceptOntology:

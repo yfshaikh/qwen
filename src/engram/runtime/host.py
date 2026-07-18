@@ -187,7 +187,8 @@ class EngramHost:
         existing = self._seeding.get(learner_id)
         if existing is not None and not existing.done():
             return
-        task = asyncio.create_task(self.memory.seed_ontology(learner_id, ontology))
+        task = asyncio.create_task(self.memory.seed_ontology(learner_id, ontology),
+                                   name=f"engram-seed:{learner_id}")
         self._seeding[learner_id] = task
         self._tasks.add(task)
 
@@ -227,7 +228,8 @@ class EngramHost:
             state["rerun"] = True
             return
         self._consolidating[learner_id] = {"rerun": False}
-        task = asyncio.create_task(self._consolidate_loop(learner_id))
+        task = asyncio.create_task(self._consolidate_loop(learner_id),
+                                   name=f"engram-consolidate:{learner_id}")
         self._tasks.add(task)
         task.add_done_callback(self._reap)
 
@@ -295,7 +297,11 @@ class EngramHost:
             return
         exc = task.exception()
         if exc is not None:
-            logger.warning("background ingest failed: %s", exc)
+            # Name the task kind: this one warning is the ONLY trace a
+            # fire-and-forget failure leaves, and "ingest failed" sent a real
+            # debugging session hunting the wrong subsystem when the dead task
+            # was a seed (Marfini, 2026-07-18).
+            logger.warning("background task %s failed: %s", task.get_name(), exc)
 
     async def _safe_ingest(self, events: list[LearningEvent]) -> bool:
         """Shielded, never-raise write. Events were built eagerly by the caller,
@@ -307,6 +313,7 @@ class EngramHost:
         # Own the shielded write: registered in _tasks so aclose() drains it and
         # _reap observes its exception even when the caller is cancelled.
         task = asyncio.ensure_future(self.memory.ingest(events))
+        task.set_name(f"engram-ingest:{events[0].learner_id}")
         self._tasks.add(task)
         task.add_done_callback(self._reap)
         try:

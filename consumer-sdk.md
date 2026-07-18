@@ -190,8 +190,10 @@ ontology = ConceptOntology(
     ],
     # DIRECTION: source must be understood BEFORE target.
     # A host row {concept: C, prerequisite: P} ("C requires P")
-    # becomes OntologyEdge(source=P, target=C, type="prerequisite").
-    edges=[OntologyEdge(source="c-slope", target="c-sif", type="prerequisite")],
+    # becomes OntologyEdge(source=P, target=C).
+    # type defaults to EdgeType.PREREQUISITE; strings ("part_of") are
+    # coerced to the enum at construction — junk raises ValueError there.
+    edges=[OntologyEdge(source="c-slope", target="c-sif")],
 )
 
 # fire-and-forget at session/course start — owned by the host process,

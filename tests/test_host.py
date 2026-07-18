@@ -355,5 +355,28 @@ async def test_failed_background_ingest_is_observed_not_lost(caplog):
         assert await host.log_note("L", "hi") is False
         for _ in range(5):
             await asyncio.sleep(0)
-    assert any("ingest failed" in r.message for r in caplog.records)
+    # The message names the task kind — "background ingest failed" for a SEED
+    # failure sent a real debugging session down the wrong subsystem.
+    assert any("engram-ingest:L" in r.message and "failed" in r.message
+               for r in caplog.records)
+    await host.aclose()
+
+
+async def test_failed_seed_warning_names_the_seed_task(caplog):
+    import asyncio
+    import logging
+
+    class _BoomSeed(Engram):
+        async def seed_ontology(self, learner_id, ontology):
+            raise RuntimeError("seed blew up")
+
+    host = EngramHost(_BoomSeed(storage=FakeStorage(), llm=FakeLLM(),
+                                embedder=FakeEmbedder(dim=8)))
+    await host.start()
+    with caplog.at_level(logging.WARNING, logger="engram.host"):
+        host.seed_soon("L", object())
+        for _ in range(5):
+            await asyncio.sleep(0)
+    assert any("engram-seed:L" in r.message and "failed" in r.message
+               for r in caplog.records)
     await host.aclose()

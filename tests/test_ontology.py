@@ -146,3 +146,32 @@ def test_seed_edges_carry_external_ids():
     edges = build_seed_edges("alice", _marfini())
     assert (edges[0].source_id, edges[0].target_id) == ("u1", "u2")
     assert edges[0].type is EdgeType.PREREQUISITE
+
+
+# --- string coercion at the boundary (Marfini seed bug, 2026-07-18) ---------
+# EdgeType subclasses str, so type="prerequisite" used to construct fine, pass
+# validate(), and die at the first `.type.value` — deep inside the seed write,
+# swallowed by the host's fire-and-forget reaper. Every session "seeded" and
+# seeded nothing. __post_init__ coercion turns the whole class of bug into
+# either a working seed or a ValueError in the host's own stack.
+
+def test_edge_type_string_is_coerced_to_enum():
+    e = OntologyEdge("a", "b", "part_of")
+    assert e.type is EdgeType.PART_OF
+
+
+def test_edge_type_junk_string_raises_at_construction():
+    with pytest.raises(ValueError):
+        OntologyEdge("a", "b", "prereq")
+
+
+def test_string_typed_ontology_seeds_enum_typed_edges():
+    # the exact Marfini shape: plain-string edge types end to end
+    ont = ConceptOntology(
+        concepts=[OntologyConcept(id="a", label="A"), OntologyConcept(id="b", label="B")],
+        edges=[OntologyEdge(source="a", target="b", type="prerequisite")],
+    )
+    ont.validate()
+    edges = build_seed_edges("L", ont)
+    assert edges[0].type is EdgeType.PREREQUISITE
+    assert edges[0].type.value == "prerequisite"  # the exact call that crashed
