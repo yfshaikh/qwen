@@ -52,7 +52,7 @@ turnkey mount.
 `packages/engram-types/`. Vendor or curl that file into your frontend (npm cannot
 install a git monorepo subdirectory at a branch reliably).
 
-Full guide: **[`docs/consumer-sdk.md`](docs/consumer-sdk.md)** (how it works,
+Full guide: **[`consumer-sdk.md`](consumer-sdk.md)** (how it works,
 lifecycle, recall, HTTP, types). Architecture deep-dive:
 [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md).
 
@@ -71,6 +71,7 @@ python3.12 -m venv .venv && source .venv/bin/activate
 pip install -e ".[dev]"
 cp .env.example .env          # then fill in real keys (see below)
 docker compose up -d          # local pgvector on :5432; auto-applies migrations/
+# (own Postgres instead? one file: psql "$DATABASE_URL" -f migrations/schema.sql)
 ```
 
 ### Environment variables (`.env`)

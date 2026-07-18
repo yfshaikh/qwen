@@ -4,8 +4,8 @@ Engram is an **in-process learner-memory library**. A host app (tutor, notes,
 quizzes) feeds it learning events; Engram maintains a per-learner knowledge
 graph and returns a token-budgeted recall block for the next turn.
 
-For internals (ports, Keeper phases, schema), see [ARCHITECTURE.md](ARCHITECTURE.md).
-For the original product vision, see [DESIGN.md](DESIGN.md).
+For internals (ports, Keeper phases, schema), see [ARCHITECTURE.md](docs/ARCHITECTURE.md).
+For the original product vision, see [DESIGN.md](docs/DESIGN.md).
 
 ---
 
@@ -57,7 +57,27 @@ pip install "engram @ git+https://github.com/yfshaikh/qwen.git@engram-poc"
 ```
 
 Requires Python 3.12+, Postgres with pgvector, and the usual model/API keys
-(see root [README.md](../README.md)).
+(see [README.md](README.md)).
+
+### Database setup (one file)
+
+[`migrations/schema.sql`](migrations/schema.sql) is the consolidated,
+idempotent schema — apply it once to any Postgres with the `vector` extension
+available:
+
+```bash
+psql "$ENGRAM_DATABASE_URL" -f migrations/schema.sql
+# or without a checkout:
+curl -fsSL https://raw.githubusercontent.com/yfshaikh/qwen/engram-poc/migrations/schema.sql \
+  | psql "$ENGRAM_DATABASE_URL"
+```
+
+Notes: embedding columns are `vector(1024)` — this must match your
+`ENGRAM_MODEL_EMBEDDER`'s dimension (`ENGRAM_EMBEDDING_DIM`). The two
+`engram_voice_*` tables are optional host-layer session storage; harmless if
+unused. The numbered `migrations/000N_*.sql` files are the incremental history
+this file consolidates — fresh installs don't need them, and re-applying
+`schema.sql` over an existing Engram DB is a no-op.
 
 Public imports (stable):
 
