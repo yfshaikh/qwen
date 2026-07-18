@@ -8,7 +8,7 @@ import json
 
 from engram.core.engram import Engram
 from engram.core.models import Completion, LearningEvent, Message
-from tests.fakes import FakeStorage
+from tests.fakes import FakeStorage, route_subpass
 
 
 class _LenEmbedder:
@@ -36,6 +36,9 @@ class _SeqLLM:
         if role == "reflector":
             self.reflector_calls += 1
             return Completion(text=self._reflector)
+        canned = route_subpass(messages)
+        if canned is not None:
+            return Completion(text=canned)
         return Completion(text=self._q.pop(0))
 
 

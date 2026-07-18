@@ -1,9 +1,10 @@
 """Edge dedup in the Keeper link step (spec 2 §6 / known issue #5).
 
 Relations now arrive via the dedicated edge pass (roadmap §3.1 fix #2): each
-consolidation makes a main extractor call (concepts) then an edge call, so
-_SeqLLM queues a [main, edge] pair per consolidation. `_extraction(relations)`
-builds that pair — the reconcile behavior under test is unchanged.
+consolidation makes a main extractor call (concepts), an evidence call (fix #8,
+answered inline with inert JSON here), then an edge call — so _SeqLLM queues a
+[main, edge] pair per consolidation. `_extraction(relations)` builds that pair;
+the reconcile behavior under test is unchanged.
 """
 import json
 
@@ -20,6 +21,8 @@ class _SeqLLM:
     async def complete(self, role: str, messages: list[Message], schema=None) -> Completion:
         if role == "reflector":
             return Completion(text="no")
+        if messages and "attribute assessment evidence" in messages[0].content:
+            return Completion(text='{"evidence": []}')
         return Completion(text=self._q.pop(0))
 
 
@@ -137,9 +140,12 @@ async def test_edge_pass_sees_known_edges_and_final_labels():
     ])
     await _consolidate(llm, storage)
     await _consolidate(llm, storage)
-    # 2 consolidations x (main + edge) = 4 non-reflector calls
-    assert len(llm.calls) == 4
-    second_edge_prompt = llm.calls[3][1].content
+    # 2 consolidations x (main + evidence + edge) = 6 non-reflector calls
+    assert len(llm.calls) == 6
+    edge_prompts = [c[1].content for c in llm.calls
+                    if "infer directed relations" in c[0].content]
+    assert len(edge_prompts) == 2
+    second_edge_prompt = edge_prompts[1]
     assert "RELATIONS ALREADY RECORDED" in second_edge_prompt
     assert "Limitzz --prerequisite--> Continuity" in second_edge_prompt
     assert "CONCEPTS:" in second_edge_prompt
@@ -150,10 +156,12 @@ async def test_single_concept_skips_edge_pass():
     only = json.dumps({"concepts": [{"label": "Limitzz", "summary": "s",
                                      "evidence": [{"kind": "asked_about", "content": "q"}]}],
                        "preferences": [], "goals": []})
-    llm = _RecordingSeqLLM([only])  # queue holds ONE response; a 2nd call would pop-crash
+    llm = _RecordingSeqLLM([only])  # queue holds ONE response; an edge call would pop-crash
     report = await _consolidate(llm, storage)
     assert report.nodes_created == 1
-    assert len(llm.calls) == 1
+    # main + evidence (a single concept can still be assessed), NO edge call
+    assert len(llm.calls) == 2
+    assert not any("infer directed relations" in c[0].content for c in llm.calls)
 
 
 async def test_edge_pass_failure_degrades_to_no_edges():

@@ -104,25 +104,31 @@ _ATTRIBUTION = (
     "`note` or nothing.\n"
 )
 
-# NOTE: relations are deliberately NOT requested here. One call was doing five
-# jobs (concepts, summaries, importance, evidence, relations) and did the last
-# badly — roadmap §3.1 fix #2 / Graphiti's split pipeline. Edge inference is a
-# separate pass (_EDGE_SYSTEM below) that runs AFTER entities are resolved.
+# NOTE: relations and CONCEPT evidence are deliberately NOT requested here.
+# One call was doing five jobs (concepts, summaries, importance, evidence,
+# relations) and did the last two badly — roadmap §3.1 fixes #2/#8 / Graphiti's
+# split pipeline. Edge inference (_EDGE_SYSTEM) and evidence attribution
+# (_EVIDENCE_SYSTEM) are separate passes that run AFTER entities are resolved.
+# Preference/goal evidence stays here: filter_provenance needs its content to
+# trace pref/goal candidates back to learner speech, and prefs/goals carry no
+# mastery signal — attribution was never their failure mode.
 _SYSTEM = (
     "You extract a learner's knowledge graph from learning events. "
-    "Return ONLY JSON with keys: concepts, preferences, goals (each a list of "
-    '{label, summary, importance, evidence:[{kind, content, importance, correct?, mastery?}]}). '
+    "Return ONLY JSON with keys: concepts (a list of {label, summary, "
+    "importance}), preferences, goals (each a list of {label, summary, "
+    'importance, evidence:[{kind, content}]}). '
     "importance is 0-1: 1.0 = central to the learner's goal or repeatedly discussed, "
     "0.7 = actively being studied, 0.4 = supporting detail, 0.1 = passing mention. "
-    + _KIND_GUIDE
-    + _ATTRIBUTION
-    + f"Evidence kind must be one of {sorted(_VALID_KINDS)}. "
-    "If an event's signals contain correct/mastery, copy them onto the evidence. "
+    f"Evidence kind must be one of {sorted(_VALID_KINDS)}; for preferences and "
+    "goals it is normally 'note', with content quoting the learner's words. "
     "Extract preferences and goals ONLY from the learner's own words; never "
     "from tutor_explanation text. A preference must be DURABLE — something the "
     "learner states as a standing preference, not a one-off request in the moment. "
     "Do not invent node types beyond concept/preference/goal. "
-    "A concept is a topic the learner is learning. Do not emit a concept for an "
+    "A concept is a topic the learner is learning. ALSO include any concept the "
+    "learner is assessed on, demonstrates, or gets corrected about — even one "
+    "they already know well — a separate pass attaches that assessment to the "
+    "concept, and it needs the concept to exist. Do not emit a concept for an "
     "incidental noun or phrase that merely appeared in the conversation."
 )
 
@@ -216,6 +222,76 @@ def build_extraction_messages(
         + "\n\nReturn the JSON described above."
     )
     return [Message(role="system", content=_SYSTEM_CLOSED), Message(role="user", content=user)]
+
+
+# The evidence/attribution pass (roadmap §3.1 fix #8). Attribution was the
+# eval's most stubborn failure: asked to extract concepts AND attribute
+# assessment evidence in one call, the model attached evidence to every concept
+# NAMED in a sentence rather than the one being ASSESSED, and logged confident
+# worked answers as inert notes (mastery stayed None). Here attribution is the
+# call's ENTIRE job, over an already-fixed concept list. Dynamic mode only —
+# closed mode's whole task already is classify-into-fixed-concepts.
+_EVIDENCE_SYSTEM = (
+    "You attribute assessment evidence to concepts in a learner's knowledge "
+    "graph. The concepts are FIXED — decide which events carry evidence about "
+    "the learner's knowledge of a listed concept, and attach each piece to the "
+    "ONE concept being assessed.\n"
+    'Return ONLY JSON: {"evidence": [{"concept_label": "...", "kind": "...", '
+    '"content": "...", "importance": 0-1, "correct": true/false (optional), '
+    '"mastery": 0-1 (optional)}]}.\n'
+    + _KIND_GUIDE
+    + _ATTRIBUTION
+    + "A correct worked answer or correct explanation counts as `demonstrated` "
+    "even when the learner frames it as a self-report ('I've got X down cold: "
+    "<correct working>'). A bare claim with no working is a `note`.\n"
+    "concept_label MUST be copied exactly from the CONCEPTS list; if an event "
+    "assesses something not listed, omit it. If an event's signals contain "
+    "correct/mastery, copy them onto the evidence. Not every event carries "
+    "evidence; an empty list is fine."
+)
+
+
+def build_evidence_messages(concept_labels: list[str], events) -> list[Message]:
+    lines = [json.dumps({"type": e.type, "text": e.text, "signals": e.signals})
+             for e in events]
+    user = (
+        "CONCEPTS:\n" + "\n".join(f"  {label}" for label in sorted(concept_labels))
+        + "\n\nEvents:\n" + "\n".join(lines)
+        + "\n\nReturn the JSON described above."
+    )
+    return [Message(role="system", content=_EVIDENCE_SYSTEM),
+            Message(role="user", content=user)]
+
+
+def parse_evidence_extraction(
+    text: str, concept_labels: set[str]
+) -> list[tuple[str, ExtractedEvidence]]:
+    """Validate the evidence pass's output. Labels resolve to a listed concept
+    (exact, else normalized) and come back as the GRAPH's labels; unknown
+    concepts and unknown kinds are dropped, never invented."""
+    try:
+        data = json.loads(text)
+    except (ValueError, TypeError) as exc:
+        raise ExtractionError(f"invalid JSON: {exc}") from exc
+    if not isinstance(data, dict):
+        raise ExtractionError("top-level JSON is not an object")
+    items = data.get("evidence", [])
+    if not isinstance(items, list):
+        raise ExtractionError("'evidence' is not a list")
+
+    by_norm = {normalize_label(label): label for label in concept_labels}
+    out: list[tuple[str, ExtractedEvidence]] = []
+    for it in items:
+        if not isinstance(it, dict):
+            continue
+        raw_label = it.get("concept_label")
+        label = raw_label if raw_label in concept_labels else (
+            by_norm.get(normalize_label(str(raw_label or ""))))
+        ev = _evidence(it)
+        if label is None or ev is None:
+            continue
+        out.append((label, ev))
+    return out
 
 
 # The edge pass (roadmap §3.1 fix #2). Asked ONE clear question, with the

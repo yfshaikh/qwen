@@ -71,8 +71,10 @@ async def test_no_ontology_nodes_means_open_extraction():
     report = await eng.consolidate("alice")
 
     extractor_calls = [c for c in llm.complete_calls if c[0] == "extractor"]
-    assert len(extractor_calls) == 1
+    # main + evidence pass (fix #8) — open mode with >=1 concept; no edge pass
+    assert len(extractor_calls) == 2
     assert extractor_calls[0][1][0].content is _SYSTEM
+    assert "attribute assessment evidence" in extractor_calls[1][1][0].content
     assert report.nodes_created == 1
 
 

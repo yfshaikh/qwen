@@ -112,6 +112,69 @@ async def test_extractor_prompt_unchanged_on_first_consolidation():
     assert "KNOWN NODES" not in llm.complete_calls[0][1][1].content
 
 
+class _RoutedLLM(FakeLLM):
+    """Answers the evidence pass from `evidence_text`, everything else canned."""
+    def __init__(self, canned_text, evidence_text):
+        super().__init__(canned_text=canned_text)
+        self._evidence_text = evidence_text
+
+    async def complete(self, role, messages, schema=None):
+        out = await super().complete(role, messages, schema)
+        if messages and "attribute assessment evidence" in messages[0].content:
+            out.text = self._evidence_text
+        return out
+
+
+async def test_evidence_pass_moves_mastery_on_the_assessed_node():
+    # Fix #8: the assessed node gets the mastery, even when the main call
+    # emitted the concept with no evidence at all.
+    fs = FakeStorage()
+    await _ingest(fs, "a")
+    llm = _RoutedLLM(
+        _extraction([{"label": "Limits", "summary": "s", "evidence": []}]),
+        '{"evidence": [{"kind": "quiz_correct", "content": "ok",'
+        ' "concept_label": "Limits", "importance": 0.8}]}')
+    emb = _StubEmbedder({"Limits": [1.0, 0.0]}, default=[0.0, 1.0])
+    await _keeper(fs, llm, emb).consolidate("a")
+    node = next(iter(fs.nodes.values()))
+    assert node.mastery == 1.0  # first observation; EWMA has no prior to blend
+    assert fs.evidence and fs.evidence[0].kind.value == "quiz_correct"
+
+
+async def test_evidence_pass_reaches_existing_untouched_node():
+    # The assessed concept need not be a candidate this batch — an existing
+    # live node can receive evidence (and gets touched, not decayed).
+    fs = FakeStorage()
+    existing = await fs.insert_node(
+        Node(learner_id="a", type=NodeType.CONCEPT, label="Limits",
+             mastery=0.5, salience=0.5, confidence=0.5, embedding=[1.0, 0.0],
+             last_seen_at=FIXED_NOW)
+    )
+    await _ingest(fs, "a")
+    llm = _RoutedLLM(
+        _extraction([]),  # main call extracts nothing
+        '{"evidence": [{"kind": "quiz_wrong", "content": "x",'
+        ' "concept_label": "Limits"}]}')
+    await _keeper(fs, llm, _StubEmbedder({}, default=[0.0, 1.0])).consolidate("a")
+    assert fs.nodes[existing].mastery == 0.7 * 0.5  # EWMA toward 0.0
+    assert fs.nodes[existing].salience > 0.5  # touched, not decayed
+
+
+async def test_evidence_pass_failure_degrades():
+    fs = FakeStorage()
+    await fs.insert_node(
+        Node(learner_id="a", type=NodeType.CONCEPT, label="Limits",
+             mastery=0.5, salience=0.5, confidence=0.5, embedding=[1.0, 0.0],
+             last_seen_at=FIXED_NOW)
+    )
+    await _ingest(fs, "a")
+    llm = _RoutedLLM(_extraction([]), "NOT JSON {")
+    report = await _keeper(fs, llm, _StubEmbedder({}, default=[0.0, 1.0])).consolidate("a")
+    assert not report.errors  # consolidation survived
+    audit = [a["rationale"] for a in await fs.get_audit("a")]
+    assert any("evidence pass failed" in (r or "") for r in audit)
+
+
 async def test_contradiction_logs_resolve_audit():
     fs = FakeStorage()
     await fs.insert_node(

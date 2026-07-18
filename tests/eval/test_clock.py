@@ -6,7 +6,7 @@ import pytest
 from engram.core.engram import Engram
 from engram.core.models import LearningEvent
 from engram.eval.clock import SimClock
-from tests.fakes import FakeEmbedder, FakeLLM, FakeStorage
+from tests.fakes import FakeEmbedder, FakeLLM, FakeStorage, route_subpass
 
 def _extraction(label: str) -> str:
     return ('{"concepts": [{"label": "%s", "summary": "s",'
@@ -21,9 +21,12 @@ class _SeqLLM(FakeLLM):
         self._texts = list(texts)
 
     async def complete(self, role, messages, schema=None):
+        from engram.core.models import Completion
         out = await super().complete(role, messages, schema)
+        canned = route_subpass(messages)
+        if canned is not None:
+            return Completion(text=canned, usage={}, model="seq")
         if self._texts:
-            from engram.core.models import Completion
             return Completion(text=self._texts.pop(0), usage={}, model="seq")
         return out
 

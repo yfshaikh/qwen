@@ -199,6 +199,53 @@ def test_parse_edge_extraction_raises_on_malformed():
         parse_edge_extraction('{"relations": "nope"}', {"A"})
 
 
+def test_open_system_no_longer_requests_concept_evidence():
+    msgs = build_extraction_messages([_ev("hi")])
+    sys = msgs[0].content
+    assert "{label, summary, importance}" in sys  # concepts: no evidence field
+    # The kind GUIDE and attribution rule moved to the evidence pass; only the
+    # bare enum stays (pref/goal evidence still needs valid kinds).
+    assert "USE THIS FOR MISCONCEPTIONS" not in sys
+    assert "BEING ASSESSED" not in sys
+
+
+def test_build_evidence_messages_shape():
+    from engram.core.extraction import build_evidence_messages
+    msgs = build_evidence_messages(["Slope", "Ohm's law"], [_ev("V=IR so 3A")])
+    assert "attribute assessment evidence" in msgs[0].content
+    assert "quiz_wrong" in msgs[0].content  # kind guide lives here now
+    assert "BEING ASSESSED" in msgs[0].content  # attribution rule too
+    assert "self-report" in msgs[0].content
+    u = msgs[1].content
+    assert "CONCEPTS:" in u and "  Ohm's law" in u and "  Slope" in u
+    assert "V=IR so 3A" in u
+
+
+def test_parse_evidence_extraction_validates():
+    from engram.core.extraction import parse_evidence_extraction
+    labels = {"Slope", "Ohm's law"}
+    out = parse_evidence_extraction(
+        '{"evidence": ['
+        '{"concept_label": "Ohm\'s law", "kind": "demonstrated", "content": "V=IR", "correct": true},'
+        '{"concept_label": "slope", "kind": "quiz_wrong", "content": "x"},'
+        '{"concept_label": "Voltage", "kind": "quiz_correct", "content": "x"},'
+        '{"concept_label": "Slope", "kind": "banana", "content": "x"}]}',
+        labels)
+    assert [(label, ev.kind) for label, ev in out] == [
+        ("Ohm's law", "demonstrated"),
+        ("Slope", "quiz_wrong"),  # normalized 'slope' -> graph label
+    ]
+    assert out[0][1].correct is True
+
+
+def test_parse_evidence_extraction_raises_on_malformed():
+    from engram.core.extraction import parse_evidence_extraction
+    with pytest.raises(ExtractionError):
+        parse_evidence_extraction("nope", {"A"})
+    with pytest.raises(ExtractionError):
+        parse_evidence_extraction('{"evidence": 5}', {"A"})
+
+
 def test_closed_prompt_carries_catalog_and_forbids_relations():
     msgs = build_extraction_messages([_ev("what is slope?")], VOCAB)
     assert msgs[0].content is not _SYSTEM

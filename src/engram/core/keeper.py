@@ -23,9 +23,11 @@ from engram.core.extraction import (
     Extraction,
     ExtractionError,
     build_edge_messages,
+    build_evidence_messages,
     build_extraction_messages,
     filter_provenance,
     parse_edge_extraction,
+    parse_evidence_extraction,
     parse_extraction,
 )
 from engram.core.mastery import decay_salience, ewma, observation_for, update_confidence
@@ -168,11 +170,22 @@ class Keeper:
         real_ids = [nid for nid in working_nodes if not nid.startswith("tmp-")]
         existing_edges = await self.storage.get_edges(learner_id, real_ids) if real_ids else []
 
-        # Edge inference is its own pass (§3.1 fix #2): entities are resolved
-        # above, so the edge call is asked one clear question over final labels.
-        # Closed mode never infers relations; the ontology's edges are law.
+        # Evidence attribution (§3.1 fix #8) then edge inference (§3.1 fix #2)
+        # are their own passes: entities are resolved above, so each call is
+        # asked one clear question over final labels. Closed mode gets neither —
+        # its single call already classifies into a fixed vocabulary, and the
+        # ontology's edges are law.
         relations = extraction.relations
         if not vocab:
+            concept_ids = {w.node.label: nid for nid, w in working_nodes.items()
+                           if w.node.type is NodeType.CONCEPT}
+            for label, ev in await self._extract_evidence(events, working_nodes, plan):
+                nid = concept_ids.get(label)
+                if nid is None:
+                    continue
+                self._apply_one_evidence(label, ev, nid, working_nodes, plan)
+                working_nodes[nid].touched = True
+
             relations = await self._extract_edges(events, working_nodes, existing_edges, plan)
             # Edge-pass proposals carry graph labels (post-merge canonical), not
             # candidate labels — make sure both resolve. Candidates win collisions.
@@ -253,6 +266,24 @@ class Keeper:
             ]
             out = await self.llm.complete("extractor", repair, schema=EXTRACTION_SCHEMA)
             return parse_extraction(out.text or "", vocabulary)  # may raise -> consolidate aborts
+
+    async def _extract_evidence(self, events, working_nodes, plan) -> list:
+        """The dedicated attribution pass (fix #8). Same degradation contract
+        as the edge pass: a failure loses one cycle of evidence, never the
+        consolidation. Runs whenever the working set has ANY concept — a single
+        concept can still be assessed."""
+        concepts = [w.node.label for w in working_nodes.values()
+                    if w.node.type is NodeType.CONCEPT]
+        if not concepts:
+            return []
+        msgs = build_evidence_messages(concepts, events)
+        try:
+            out = await self.llm.complete("extractor", msgs, schema=EXTRACTION_SCHEMA)
+            return parse_evidence_extraction(out.text or "", set(concepts))
+        except Exception:  # noqa: BLE001 — see docstring
+            plan.audit.append(AuditEntry(
+                op="link", rationale="evidence pass failed; no evidence this cycle"))
+            return []
 
     async def _extract_edges(self, events, working_nodes, existing_edges, plan) -> list:
         """The dedicated edge pass. Degrades to no-relations on any failure —
@@ -343,31 +374,34 @@ class Keeper:
             return False  # degrade: not-same -> create new
 
     def _apply_evidence(self, cand, target_id, working_nodes, plan) -> None:
-        node = working_nodes[target_id].node
         for ev in cand.evidence:
-            plan.new_evidence.append(
-                Evidence(
-                    node_id=target_id,
-                    kind=EvidenceKind(ev.kind),
-                    content=ev.content,
-                    importance=ev.importance,
+            self._apply_one_evidence(cand.label, ev, target_id, working_nodes, plan)
+
+    def _apply_one_evidence(self, label, ev, target_id, working_nodes, plan) -> None:
+        node = working_nodes[target_id].node
+        plan.new_evidence.append(
+            Evidence(
+                node_id=target_id,
+                kind=EvidenceKind(ev.kind),
+                content=ev.content,
+                importance=ev.importance,
+            )
+        )
+        if ev.importance is not None:
+            node.importance = ewma(node.importance, ev.importance, self.params.ewma_alpha)
+        obs = observation_for(ev.kind, ev.correct, ev.mastery)
+        if obs is None:
+            return
+        new_conf, conflicted = update_confidence(node.confidence, node.mastery, obs)
+        node.mastery = ewma(node.mastery, obs, self.params.ewma_alpha)
+        node.confidence = new_conf
+        if conflicted:
+            plan.audit.append(
+                AuditEntry(
+                    op="resolve_contradiction",
+                    rationale=f"{label}: obs {obs} vs prior mastery",
                 )
             )
-            if ev.importance is not None:
-                node.importance = ewma(node.importance, ev.importance, self.params.ewma_alpha)
-            obs = observation_for(ev.kind, ev.correct, ev.mastery)
-            if obs is None:
-                continue
-            new_conf, conflicted = update_confidence(node.confidence, node.mastery, obs)
-            node.mastery = ewma(node.mastery, obs, self.params.ewma_alpha)
-            node.confidence = new_conf
-            if conflicted:
-                plan.audit.append(
-                    AuditEntry(
-                        op="resolve_contradiction",
-                        rationale=f"{cand.label}: obs {obs} vs prior mastery",
-                    )
-                )
 
     def _decay_and_snapshot(self, working_nodes, now, plan) -> None:
         for nid, w in working_nodes.items():

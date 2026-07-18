@@ -24,6 +24,19 @@ _cosine = cosine_similarity
 _AUDIT_BASE = datetime(2026, 1, 1, tzinfo=timezone.utc)
 
 
+def route_subpass(messages) -> str | None:
+    """Keeper sub-pass calls (evidence attribution, edge inference) share the
+    'extractor' role with the main extraction call. Sequential fakes route them
+    to inert canned JSON so their queue arithmetic tracks MAIN extractions only;
+    tests that exercise a sub-pass answer it from their own queue instead."""
+    system = messages[0].content if messages else ""
+    if "attribute assessment evidence" in system:
+        return '{"evidence": []}'
+    if "infer directed relations" in system:
+        return '{"relations": []}'
+    return None
+
+
 class FakeLLM:
     def __init__(self, canned_text: str = "ok") -> None:
         self.canned_text = canned_text
