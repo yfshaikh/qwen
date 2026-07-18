@@ -38,7 +38,15 @@ CHECKS = ROOT / "src" / "engram" / "eval" / "checks"
 # Update ONLY when changing ground truth on purpose. See module docstring.
 # 2026-07-17: dedup denominator C(n,2) pairs -> nodes (STRICTER; roadmap §4.4
 # "fix dedup's quadratic denominator"). Frozen fixtures untouched.
-PINNED = "eb815b0e4a92f3945a4312ef277aca1e0b654d24de62269a7cd7b6e30e45d46b"
+# 2026-07-18: sat-linear-holdout alias recalibration after fix #1 changed the
+# extractor's phrasing (3 aliases added, human-approved; no structural
+# expectation loosened). Details in the fixture's CALIBRATED comments.
+# 2026-07-18 (2): LLM residue matcher added to _match.py (user-approved) —
+# measured session-0 label drift across providers means no authored alias list
+# converges. LLM decides label IDENTITY only, for the unmatched residue only;
+# all structural assertions stay deterministic; every LLM-decided pair is
+# printed in check details for human audit; failure degrades to plain resolve().
+PINNED = "4ce3a2c9a77fdda71ca68c4d11c2ef115de7ae67724eec119a6fc6c40598517b"
 
 
 def _digest() -> tuple[str, list[str]]:

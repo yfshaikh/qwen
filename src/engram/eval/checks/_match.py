@@ -32,9 +32,11 @@ calibrate them from a real run.
 """
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass, field
 from typing import Any
 
+from engram.core.models import Message
 from engram.eval.scenario import alias_forms
 
 
@@ -124,6 +126,82 @@ def resolve(nodes: list[dict], expected: list[str],
     matched_ids = {id(n) for v in by_label.values() for n in v}
     unmatched = [str(n.get("label")) for n in live if id(n) not in matched_ids]
     return Resolution(by_label=by_label, unmatched=unmatched)
+
+
+_LLM_MATCH_SYSTEM = (
+    "You match node labels from a learner's knowledge graph to expected concept "
+    "names. Two labels match ONLY if they denote the SAME concept — a variant "
+    "phrasing, abbreviation, or expansion. A related, broader, or narrower "
+    "concept is NOT a match.\n"
+    'Return ONLY JSON: {"mapping": [{"graph_label": "...", "expected": "..."}]}. '
+    "Each graph_label may appear at most once. Omit anything you are not sure "
+    "of; an empty mapping is a good answer."
+)
+
+
+async def _llm_residue_map(llm: Any, missing: list[str],
+                           unmatched: list[str]) -> dict[str, str]:
+    """One call: which unmatched graph labels ARE which missing expected
+    concepts? Validated both ways; anything else is dropped. Any failure
+    returns {} — the fail-safe is deterministic behavior."""
+    user = ("EXPECTED CONCEPTS (not yet found in the graph):\n"
+            + "\n".join(f"  {x}" for x in missing)
+            + "\n\nGRAPH LABELS (not yet matched to anything):\n"
+            + "\n".join(f"  {x}" for x in unmatched)
+            + "\n\nReturn the JSON described above.")
+    try:
+        out = await llm.complete("judge", [
+            Message(role="system", content=_LLM_MATCH_SYSTEM),
+            Message(role="user", content=user),
+        ], {"type": "object"})
+        data = json.loads(getattr(out, "text", None) or "")
+        raw = data.get("mapping", [])
+    except Exception:  # noqa: BLE001 — matcher failure must not fail the check differently
+        return {}
+    want, have = set(missing), set(unmatched)
+    mapping: dict[str, str] = {}
+    for m in raw if isinstance(raw, list) else []:
+        if not isinstance(m, dict):
+            continue
+        g, e = m.get("graph_label"), m.get("expected")
+        if g in have and e in want and g not in mapping:
+            mapping[g] = e
+    return mapping
+
+
+async def resolve_llm(ctx: Any, nodes: list[dict], expected: list[str],
+                      aliases: dict[str, list[str]] | None = None,
+                      node_type: str | None = None) -> tuple[Resolution, list[str]]:
+    """resolve(), then map the leftover via ONE LLM call (roadmap §3.3's
+    bijection matcher — built because measured drift met its precondition:
+    session-0 label minting varies run-to-run and provider-to-provider even at
+    temperature 0, so no authored alias list converges).
+
+    The LLM decides IDENTITY only; every structural assertion stays
+    deterministic on top of the mapping. Two graph labels mapping to one
+    expected concept still land as a duplicate failure — the matcher cannot
+    paper over the dedup bug. Returns (resolution, notes); notes name every
+    LLM-decided pair so the human running the eval can audit them, and MUST be
+    surfaced in the check's details.
+    """
+    res = resolve(nodes, expected, aliases, node_type)
+    missing = res.missing()
+    llm = getattr(getattr(ctx, "eng", None), "llm", None)
+    if not missing or not res.unmatched or llm is None:
+        return res, []
+    mapping = await _llm_residue_map(llm, missing, list(res.unmatched))
+    if not mapping:
+        return res, []
+    live = live_nodes(nodes, node_type)
+    notes: list[str] = []
+    for graph_label, exp in mapping.items():
+        hits = [n for n in live if norm_label(n.get("label", "")) == norm_label(graph_label)]
+        if not hits:
+            continue
+        res.by_label[exp].extend(hits)
+        res.unmatched = [u for u in res.unmatched if u != graph_label]
+        notes.append(f"llm-matched {graph_label!r} -> {exp!r}")
+    return res, notes
 
 
 def node_id_set(nodes: list[dict]) -> set[str]:

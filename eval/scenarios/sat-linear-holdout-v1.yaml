@@ -260,11 +260,26 @@ sessions:
 # --------------------------------------------------------------------------
 # GROUND TRUTH
 # --------------------------------------------------------------------------
+# Preference/goal surface forms. Concepts carry aliases inline below; prefs and
+# goals read this top-level map (same normalized-equality matcher). CALIBRATED
+# 2026-07-18 from runs 9fd5e40e/b437feb8/594a91ce (post-fix-#1, Cerebras
+# fallback): both variants emitted identically 3/3 runs. Human-judged same
+# thing: a learning style IS the stated preference; "by October" is the same
+# goal with its deadline attached.
+aliases:
+  Worked example first: [worked-example-first learning style]
+  SAT math score 700: [SAT math score 700 by October]
+
 expect:
   concepts:
     # ⚠️ ALIASES ARE GUESSES until a calibration run says otherwise (see header).
+    # CALIBRATED 2026-07-18 (runs 9fd5e40e/b437feb8/594a91ce, ALL post-fix-#1
+    # phrasing, served via the Cerebras 429-fallback): the KNOWN NODES anchor
+    # made the extractor emit 'solving single linear equations' byte-stably,
+    # 3/3 runs. Aliases are additive — Groq's phrasing variants stay valid.
     - label: Solving linear equations
-      aliases: [solving linear equations, linear equations, solving equations]
+      aliases: [solving linear equations, linear equations, solving equations,
+                solving single linear equations]
     - label: Slope
       aliases: [slope, rise over run, rate of change]
     - label: Slope-intercept form

@@ -25,7 +25,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from engram.eval.checks._match import node_id_set, resolve, snapshot_nodes
+from engram.eval.checks._match import node_id_set, resolve_llm, snapshot_nodes
 from engram.eval.registry import CheckResult, EvalContext, check
 
 
@@ -75,8 +75,9 @@ async def edges(ctx: EvalContext) -> CheckResult:
     # separating "real bug" from "stale alias" must not itself cry wolf.
     expected_concepts = {str(c["label"]) for c in (expect.get("concepts") or [])
                          if isinstance(c, dict) and c.get("label")}
-    res = resolve(nodes, sorted(endpoints | expected_concepts), aliases,
-                  node_type="concept")
+    res, llm_notes = await resolve_llm(ctx, nodes,
+                                       sorted(endpoints | expected_concepts),
+                                       aliases, node_type="concept")
 
     failures: list[str] = []
     checked = 0
@@ -113,4 +114,4 @@ async def edges(ctx: EvalContext) -> CheckResult:
                  "edges_checked": float(checked),
                  "edge_failures": float(len([f for f in failures if not f.startswith("unmatched")])),
                  "graph_edges": float(len(graph_edges))},
-        passed=not failures, details=failures)
+        passed=not failures, details=failures + llm_notes)

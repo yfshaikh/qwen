@@ -12,7 +12,7 @@ from __future__ import annotations
 from collections import defaultdict
 
 from engram.core.text import normalize_label
-from engram.eval.checks._match import live_nodes, resolve, snapshot_nodes
+from engram.eval.checks._match import live_nodes, resolve_llm, snapshot_nodes
 from engram.eval.registry import CheckResult, EvalContext, check
 
 
@@ -24,7 +24,7 @@ async def concepts(ctx: EvalContext) -> CheckResult:
     aliases = getattr(ctx.scenario, "aliases", None)
 
     nodes = snapshot_nodes(ctx)
-    res = resolve(nodes, required, aliases, node_type="concept")
+    res, llm_notes = await resolve_llm(ctx, nodes, required, aliases, node_type="concept")
     failures: list[str] = []
 
     for label in res.missing():
@@ -101,4 +101,4 @@ async def concepts(ctx: EvalContext) -> CheckResult:
                  "duplicate_label_groups": float(dup_pairs),
                  "cross_type_duplicates": float(cross_type),
                  "live_concepts": float(live_count)},
-        passed=not failures, details=failures)
+        passed=not failures, details=failures + llm_notes)

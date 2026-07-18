@@ -33,7 +33,7 @@ from __future__ import annotations
 from engram.eval.checks._match import (
     live_nodes,
     mentions_topic,
-    resolve,
+    resolve_llm,
     snapshot_nodes,
 )
 from engram.eval.registry import CheckResult, EvalContext, check
@@ -57,10 +57,13 @@ async def preferences(ctx: EvalContext) -> CheckResult:
     aliases = getattr(ctx.scenario, "aliases", None)
     nodes = snapshot_nodes(ctx)
     failures: list[str] = []
+    notes: list[str] = []
 
     for key, node_type in (("preferences", "preference"), ("goals", "goal")):
         want = _required(expect, key)
-        res = resolve(nodes, want, aliases, node_type=node_type)
+        res, llm_notes = await resolve_llm(ctx, nodes, want, aliases,
+                                           node_type=node_type)
+        notes.extend(llm_notes)
         for label in res.missing():
             failures.append(f"missing {node_type} {label!r}; {res.unmatched_note()}")
         for label, dupes in res.duplicated().items():
@@ -102,4 +105,4 @@ async def preferences(ctx: EvalContext) -> CheckResult:
         metrics={"live_preferences": float(n_pref),
                  "live_goals": float(n_goal),
                  "preference_failures": float(len(failures))},
-        passed=not failures, details=failures)
+        passed=not failures, details=failures + notes)

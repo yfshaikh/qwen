@@ -29,19 +29,20 @@ from __future__ import annotations
 
 from typing import Any
 
-from engram.eval.checks._match import resolve, snapshot_nodes
+from engram.eval.checks._match import resolve_llm, snapshot_nodes
 from engram.eval.registry import CheckResult, EvalContext, check
 
 
-def _mastery_of(ctx: EvalContext, concept: str, session: int,
-                aliases: Any) -> tuple[float | None, str | None]:
+async def _mastery_of(ctx: EvalContext, concept: str, session: int, aliases: Any,
+                      notes: list[str]) -> tuple[float | None, str | None]:
     """(mastery, error). A missing node or a null mastery is an ERROR, never a
     pass. Coercing None to 0.0 would let a data bug report as a satisfied
     expectation — the same trap lifecycle.py documents for salience."""
     nodes = snapshot_nodes(ctx, session)
     if not nodes:
         return None, f"no snapshot for session {session}"
-    res = resolve(nodes, [concept], aliases, node_type="concept")
+    res, llm_notes = await resolve_llm(ctx, nodes, [concept], aliases, node_type="concept")
+    notes.extend(f"s{session}: {n}" for n in llm_notes)
     got = res.by_label.get(concept) or []
     if not got:
         return None, f"concept {concept!r} absent after session {session}; {res.unmatched_note()}"
@@ -62,6 +63,7 @@ async def knowledge_update(ctx: EvalContext) -> CheckResult:
     aliases = getattr(ctx.scenario, "aliases", None)
 
     failures: list[str] = []
+    notes: list[str] = []
     checked = 0
 
     for spec in specs:
@@ -72,7 +74,7 @@ async def knowledge_update(ctx: EvalContext) -> CheckResult:
         session = int(spec["after_session"])
         checked += 1
 
-        m, err = _mastery_of(ctx, concept, session, aliases)
+        m, err = await _mastery_of(ctx, concept, session, aliases, notes)
         if err is not None:
             failures.append(err)
             continue
@@ -87,7 +89,7 @@ async def knowledge_update(ctx: EvalContext) -> CheckResult:
 
         if "increased_from_session" in spec:
             prior_session = int(spec["increased_from_session"])
-            prior, perr = _mastery_of(ctx, concept, prior_session, aliases)
+            prior, perr = await _mastery_of(ctx, concept, prior_session, aliases, notes)
             if perr is not None:
                 failures.append(f"cannot compare {concept!r} to s{prior_session}: {perr}")
             elif prior is not None and not (m > prior):
@@ -99,4 +101,4 @@ async def knowledge_update(ctx: EvalContext) -> CheckResult:
         name="knowledge_update",
         metrics={"mastery_expectations": float(checked),
                  "mastery_failures": float(len(failures))},
-        passed=not failures, details=failures)
+        passed=not failures, details=failures + sorted(set(notes)))
