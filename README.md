@@ -7,6 +7,41 @@ events into a living knowledge graph of a learner, maintained by an offline
 See `docs/ARCHITECTURE.md` for the architecture as actually built, and
 `docs/DESIGN.md` for the original vision.
 
+## Architecture
+
+The entire AI stack is Qwen-native on Alibaba Cloud Model Studio (DashScope).
+The FastAPI backend wraps the Engram memory core, persists to Postgres+pgvector,
+and serves the React/Vite console over HTTP and WebSocket.
+
+```mermaid
+flowchart TB
+    subgraph Qwen["Qwen Cloud / DashScope"]
+        chat["qwen-plus (chat)"]
+        embed["text-embedding-v3 (embeddings)"]
+        stt["qwen3-asr-flash (STT)"]
+        tts["qwen3-tts-flash (TTS)"]
+    end
+
+    subgraph Backend["FastAPI backend"]
+        core["Engram core: recall, Keeper consolidation, voice pipeline"]
+    end
+
+    subgraph Frontend["React / Vite frontend"]
+        ui["Voice tutor + memory graph"]
+    end
+
+    db[("Postgres / pgvector")]
+
+    ui -->|HTTP / WebSocket| core
+
+    core -->|tutor + extraction/reflection| chat
+    core -->|vector recall| embed
+    core -->|speech-to-text| stt
+    core -->|text-to-speech| tts
+
+    core -->|events + graph + embeddings| db
+```
+
 ## What's here
 
 - **`src/engram/`** — the memory core (`ingest` / `recall` / `consolidate` /

@@ -41,6 +41,7 @@ from engram.eval.scenario import load_scenario
 from engram.insights.routes import insights_router
 from engram.tutor.tutor import Tutor
 from engram.voice.routes import is_consolidating, voice_router
+from engram.whiteboard.routes import whiteboard_router
 
 DEFAULT_POLL_SECONDS = 1.0
 HEARTBEAT_SECONDS = 15.0
@@ -58,6 +59,7 @@ async def lifespan(app: FastAPI):
 app = FastAPI(title="Engram", lifespan=lifespan)
 app.include_router(insights_router)
 app.include_router(voice_router)
+app.include_router(whiteboard_router)
 
 
 @app.get("/health", response_model=HealthResponse)

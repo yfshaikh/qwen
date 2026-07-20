@@ -1,0 +1,28 @@
+# Keep build contexts lean and keep secrets out of images.
+.git
+.github
+.venv
+**/node_modules
+**/__pycache__
+*.pyc
+.pytest_cache
+.ruff_cache
+.mypy_cache
+.vscode
+.idea
+.DS_Store
+
+# Secrets — never ship these into an image.
+.env
+.env.*
+!.env.example
+
+# Rebuilt inside the image.
+web/dist
+
+# Not needed at runtime.
+tests
+eval/reports/*
+eval/runs/*
+docs/superpowers
+.superpowers

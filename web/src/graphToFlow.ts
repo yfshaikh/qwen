@@ -1,9 +1,26 @@
 import dagre from 'dagre'
-import type { Edge, Node } from 'reactflow'
+import { MarkerType, type Edge, type Node } from 'reactflow'
 import type { GraphResponse } from './types'
 
 const W = 180
 const H = 96
+
+// Edge styling by relation type. Direction is carried by the arrowhead;
+// relates_to is undirected noise, so it gets no arrow and stays faint.
+const EDGE_STYLE: Record<string, Partial<Edge>> = {
+  prerequisite: {
+    animated: true,
+    style: { stroke: '#6366f1', strokeDasharray: '5 4', strokeWidth: 1.5, opacity: 0.55 },
+    markerEnd: { type: MarkerType.ArrowClosed, width: 14, height: 14, color: '#6366f1' },
+  },
+  part_of: {
+    style: { stroke: '#10b981', strokeDasharray: '2 3', strokeWidth: 1.25, opacity: 0.5 },
+    markerEnd: { type: MarkerType.ArrowClosed, width: 12, height: 12, color: '#10b981' },
+  },
+  relates_to: {
+    style: { stroke: '#a1a1aa', strokeDasharray: '1 4', strokeWidth: 1, opacity: 0.35 },
+  },
+}
 
 export function graphToFlow(g: GraphResponse): { nodes: Node[]; edges: Edge[] } {
   const nodes: Node[] = g.nodes.map((n) => ({
@@ -16,12 +33,8 @@ export function graphToFlow(g: GraphResponse): { nodes: Node[]; edges: Edge[] } 
     id: e.id ?? `${e.source}-${e.target}`,
     source: e.source,
     target: e.target,
-    label: e.type,
     type: 'smoothstep',
-    style: { stroke: '#cbd0d8', strokeWidth: 1.5 },
-    labelStyle: { fill: '#71717a', fontSize: 11 },
-    labelBgStyle: { fill: '#fafafa' },
-    labelBgPadding: [4, 2] as [number, number],
+    ...(EDGE_STYLE[e.type] ?? EDGE_STYLE.relates_to),
   }))
   return { nodes: layout(nodes, edges), edges }
 }

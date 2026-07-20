@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 import { Explainer } from './components/Explainer'
 import { GraphView } from './components/GraphView'
 import { KeeperTrace } from './components/KeeperTrace'
@@ -9,6 +9,11 @@ import { VoiceTranscriptPanel } from './components/VoiceTranscriptPanel'
 import { EvalsPage } from './components/evals/EvalsPage'
 import { DashboardPage } from './components/dashboard/DashboardPage'
 import { useVoiceTutor } from './voice/useVoiceTutor'
+import { Whiteboard } from './voice/whiteboard/Whiteboard'
+import { ClickyCursor } from './voice/whiteboard/ClickyCursor'
+import { useWhiteboard } from './voice/whiteboard/useWhiteboard'
+import { onAskRequested, setSelection } from './voice/whiteboard/selectionBus'
+import type { ClickyGestureEvent } from './voice/whiteboard/types'
 import * as api from './api'
 import type { AuditRow, ConsolidateReport, EvalScenario, GraphNode, GraphResponse } from './types'
 import { buildSessionExport, downloadJson } from './exportSession'
@@ -32,6 +37,33 @@ export default function App() {
   const [refreshKey, setRefreshKey] = useState(0)
 
   const voice = useVoiceTutor(learner)
+  const wb = useWhiteboard(learner)
+  const [showBoard, setShowBoard] = useState(false)
+
+  // Text selection → clicky "Ask about this" menu. Active only while the board
+  // is open (that's where the cursor lives). Asking draws a diagram of the
+  // highlighted text.
+  useEffect(() => {
+    if (!showBoard) return
+    const sync = () => {
+      const sel = window.getSelection()
+      const text = sel?.toString().trim() ?? ''
+      if (sel && text && sel.rangeCount > 0) {
+        setSelection({ text, rect: sel.getRangeAt(0).getBoundingClientRect() })
+      } else {
+        setSelection(null)
+      }
+    }
+    document.addEventListener('mouseup', sync)
+    document.addEventListener('selectionchange', sync)
+    return () => {
+      document.removeEventListener('mouseup', sync)
+      document.removeEventListener('selectionchange', sync)
+      setSelection(null)
+    }
+  }, [showBoard])
+
+  useEffect(() => onAskRequested((text) => wb.draw(text)), [wb])
 
   // Persist the learner id so a reload resumes the same session.
   useEffect(() => {
@@ -199,6 +231,19 @@ export default function App() {
           Dashboard
         </button>
         <button
+          onClick={() => {
+            if (view !== 'console') setView('console')
+            setShowBoard((v) => !v)
+          }}
+          className={`rounded-lg border px-2.5 py-1 text-xs font-medium transition ${
+            showBoard && view === 'console'
+              ? 'border-indigo-200 bg-indigo-50 text-indigo-700'
+              : 'border-zinc-200 text-zinc-600 hover:bg-zinc-50'
+          }`}
+        >
+          Whiteboard
+        </button>
+        <button
           onClick={() => setView('explainer')}
           className="rounded-lg border border-zinc-200 px-2.5 py-1 text-xs font-medium text-zinc-600 transition hover:bg-zinc-50"
         >
@@ -240,6 +285,19 @@ export default function App() {
             onHoldStart={voice.startHold}
             onHoldEnd={voice.endHold}
           />
+          {showBoard && (
+            <div className="absolute inset-0 z-10">
+              <Whiteboard
+                panels={wb.panels}
+                generating={wb.generating}
+                error={wb.error}
+                onDraw={wb.draw}
+                onDelete={wb.deletePanel}
+                onExit={() => setShowBoard(false)}
+                onPoint={(a) => wb.fireGesture(a, 'circle')}
+              />
+            </div>
+          )}
         </main>
         <SessionSidebar learner={learner} refreshKey={refreshKey} />
       </div>
@@ -247,6 +305,12 @@ export default function App() {
       <footer className="border-t border-zinc-200 bg-white">
         <KeeperTrace report={report} rows={audit} error={traceErr} />
       </footer>
+      <ClickyCursor
+        active={showBoard}
+        speaking={voice.phase === 'speaking'}
+        gesture={wb.gesture}
+        onDone={wb.onGestureDone}
+      />
         </>
       )}
     </div>

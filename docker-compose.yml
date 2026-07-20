@@ -1,3 +1,9 @@
+# Full Engram stack: Postgres (pgvector) + backend (FastAPI) + frontend (nginx).
+# One command:  docker compose up -d --build
+#
+# Host ports are overridable so a test/second stack can run alongside a dev one,
+# e.g.  FRONTEND_PORT=8080 BACKEND_PORT=8060 POSTGRES_PORT=5433 \
+#        docker compose -p engramtest up -d --build
 services:
   db:
     image: pgvector/pgvector:pg16
@@ -6,8 +12,10 @@ services:
       POSTGRES_PASSWORD: engram
       POSTGRES_DB: engram
     ports:
-      - "5432:5432"
+      - "${POSTGRES_PORT:-5432}:5432"
     volumes:
+      # Auto-applies every .sql in migrations/ on first init (idempotent; the
+      # numbered migrations and the consolidated schema.sql all use IF NOT EXISTS).
       - ./migrations:/docker-entrypoint-initdb.d:ro
       - engram_pgdata:/var/lib/postgresql/data
     healthcheck:
@@ -15,6 +23,31 @@ services:
       interval: 2s
       timeout: 2s
       retries: 30
+
+  backend:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    environment:
+      # Passed through from the host env / .env (docker compose auto-loads .env).
+      DASHSCOPE_API_KEY: ${DASHSCOPE_API_KEY:?set DASHSCOPE_API_KEY in .env}
+      # Defaults to the bundled Postgres service; override in .env to point at
+      # PolarDB or any external Postgres (see DEPLOY.md).
+      DATABASE_URL: ${DATABASE_URL:-postgresql://engram:engram@db:5432/engram}
+    depends_on:
+      db:
+        condition: service_healthy
+    ports:
+      - "${BACKEND_PORT:-8050}:8050"
+
+  frontend:
+    build:
+      context: .
+      dockerfile: web/Dockerfile
+    depends_on:
+      - backend
+    ports:
+      - "${FRONTEND_PORT:-80}:80"
 
 volumes:
   engram_pgdata:

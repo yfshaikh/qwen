@@ -28,9 +28,12 @@ describe('graphToFlow', () => {
     expect(a.position.x !== b.position.x || a.position.y !== b.position.y).toBe(true)
   })
 
-  it('maps edges with source/target/label', () => {
+  it('maps edges with source/target and a type-specific style', () => {
     const { edges } = graphToFlow(G)
-    expect(edges[0]).toMatchObject({ id: 'e1', source: 'a', target: 'b', label: 'prerequisite' })
+    // prerequisite edges are animated + arrowheaded (direction via marker, no text label)
+    expect(edges[0]).toMatchObject({ id: 'e1', source: 'a', target: 'b', animated: true })
+    expect(edges[0].markerEnd).toBeTruthy()
+    expect(edges[0].style?.strokeDasharray).toBe('5 4')
   })
 
   it('uses the custom node renderer and carries the type (for coloring)', () => {

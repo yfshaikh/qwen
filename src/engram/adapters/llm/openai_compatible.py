@@ -109,7 +109,7 @@ def build_llm(settings: Any) -> OpenAICompatibleLLM:
         # a hiccup, not a failed run; the SDK honours Retry-After.
         max_retries=5,
     )
-    roles = ("tutor", "extractor", "reflector", "student", "judge")
+    roles = ("tutor", "extractor", "reflector", "student", "judge", "diagram")
     role_to_model = {r: settings.model_for(r) for r in roles}
     # Only roles with a configured temperature land in the map; the rest keep the
     # provider default (see OpenAICompatibleLLM.__init__).
