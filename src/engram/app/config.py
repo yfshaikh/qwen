@@ -38,13 +38,6 @@ class Settings(BaseSettings):
     model_embedder: str = Field(default="text-embedding-v3", alias="ENGRAM_MODEL_EMBEDDER")
     model_student: str | None = Field(default=None, alias="ENGRAM_MODEL_STUDENT")
     model_judge: str | None = Field(default=None, alias="ENGRAM_MODEL_JUDGE")
-    # Whiteboard SVG-diagram generation (voice/clicky feature). Routed to a GLM
-    # model on the SAME DashScope client — no second provider. GLM availability on
-    # the DashScope *international* endpoint is UNCONFIRMED: verify "glm-5.2"
-    # against the DashScope model catalog and override via ENGRAM_MODEL_DIAGRAM.
-    # If GLM isn't served on intl, set ENGRAM_MODEL_DIAGRAM to a Qwen model
-    # (e.g. "qwen-plus") — everything still rides the one DashScope base URL.
-    model_diagram: str = Field(default="glm-5.2", alias="ENGRAM_MODEL_DIAGRAM")
 
     # Role -> sampling temperature. None = provider default (today's behavior;
     # nothing changes unless you set one).
@@ -110,7 +103,6 @@ class Settings(BaseSettings):
             "embedder": self.model_embedder,
             "student": self.model_student or self.model_tutor,
             "judge": self.model_judge or self.model_reflector,
-            "diagram": self.model_diagram,
         }
         try:
             return table[role]

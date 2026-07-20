@@ -28,7 +28,6 @@
  */
 
 import type { VoiceEvents } from './types';
-import type { ClickyGestureEvent } from './whiteboard/types';
 
 type Listener<K extends keyof VoiceEvents> = (data: VoiceEvents[K]) => void;
 
@@ -64,16 +63,8 @@ export class VoiceSession {
   private mediaRecorder: MediaRecorder | null = null;
 
   private audioEl: HTMLAudioElement | null = null;
-  /** Queue of complete audio files (one per sentence) awaiting playback, each
-   *  carrying the clicky gestures the server emitted just before it. The
-   *  gestures fire when the item STARTS playing, so the pointer tracks the
-   *  heard sentence (the blob-queue analogue of Marfini's MSE buffered-clock
-   *  scheduling — MediaSource doesn't exist on this path). */
-  private audioQueue: { buf: ArrayBuffer; gestures: ClickyGestureEvent[] }[] = [];
-  /** Clicky gestures received since the last audio message — they belong to
-   *  the NEXT sentence's audio (the server emits each gesture just before its
-   *  sentence's bytes). Attached to that audio item when it arrives. */
-  private pendingGestures: ClickyGestureEvent[] = [];
+  /** Queue of complete audio files (one per sentence) awaiting playback. */
+  private pendingAudio: ArrayBuffer[] = [];
   /** True while an utterance is playing; gates the queue so the next file
    *  starts only once the element is free (on `ended`). */
   private playing = false;
@@ -405,11 +396,7 @@ export class VoiceSession {
       // MediaSource if we let them through. discardIncomingAudio
       // gets cleared when the server sends turn_done.
       if (this.discardIncomingAudio) return;
-      // This sentence's audio just arrived — claim the gestures that streamed
-      // ahead of it, so they fire exactly when it starts playing.
-      const gestures = this.pendingGestures;
-      this.pendingGestures = [];
-      this.audioQueue.push({ buf: e.data, gestures });
+      this.pendingAudio.push(e.data);
       this.drainPlayback();
       return;
     }
@@ -466,51 +453,11 @@ export class VoiceSession {
         // events for this turn" signal, so clear here too.
         this.turnInProgress = false;
         this.discardIncomingAudio = false;
-        // Any gesture with no following audio (a trailing tag) will never be
-        // claimed by an audio item — fire it now so it isn't lost.
-        for (const g of this.pendingGestures) this.emit('clicky_gesture', g);
-        this.pendingGestures = [];
         this.emit('turn_done', undefined);
         break;
       case 'error':
         this.emit('error', { message: String(msg.message ?? 'Unknown error') });
         break;
-      case 'whiteboard_pending':
-        this.emit('whiteboard_pending', {
-          panelId: String(msg.panel_id ?? ''),
-          intent: msg.intent as string | undefined,
-        });
-        break;
-      case 'whiteboard_panel':
-        this.emit('whiteboard_panel', {
-          panelId: String(msg.panel_id ?? ''),
-          html: String(msg.html ?? ''),
-          caption: msg.caption as string | undefined,
-          intent: msg.intent as string | undefined,
-          anchors: Array.isArray(msg.anchors) ? (msg.anchors as string[]) : undefined,
-          model: msg.model as string | undefined,
-        });
-        break;
-      case 'whiteboard_error':
-        this.emit('whiteboard_error', {
-          panelId: String(msg.panel_id ?? ''),
-          message: String(msg.message ?? 'render failed'),
-          intent: msg.intent as string | undefined,
-        });
-        break;
-      case 'clicky_gesture': {
-        // Do NOT emit on receipt — the gesture arrives ahead of its audio.
-        // Buffer it; it fires when the next audio item starts playing. If no
-        // audio ever follows (e.g. a trailing gesture), turn_done flushes it.
-        const g: ClickyGestureEvent = {
-          gestureId: String(msg.gesture_id ?? Math.random().toString(36).slice(2)),
-          anchor: String(msg.anchor ?? ''),
-          gesture: msg.gesture as ClickyGestureEvent['gesture'],
-          note: msg.note as string | undefined,
-        };
-        this.pendingGestures.push(g);
-        break;
-      }
       // Unknown types are ignored — reserved for protocol extensions.
     }
   }
@@ -523,8 +470,6 @@ export class VoiceSession {
       this.releaseCurrentUrl();
       this.playing = false;
       this.drainPlayback();
-      // Queue drained and nothing restarted — narration has stopped.
-      if (!this.playing) this.emit('narrating', { active: false });
     };
     this.audioEl.addEventListener('ended', advance);
     this.audioEl.addEventListener('error', advance);
@@ -532,19 +477,14 @@ export class VoiceSession {
 
   private drainPlayback(): void {
     if (this.playing || !this.audioEl) return;
-    const next = this.audioQueue.shift();
+    const next = this.pendingAudio.shift();
     if (!next) return;
     this.playing = true;
     // Each queued item is a COMPLETE audio file; a Blob URL lets the
     // element decode it natively (WAV today, any container tomorrow).
-    this.audioObjectUrl = URL.createObjectURL(new Blob([next.buf]));
+    this.audioObjectUrl = URL.createObjectURL(new Blob([next]));
     this.audioEl.src = this.audioObjectUrl;
     this.audioEl.playbackRate = this.playbackRate;
-    // This sentence STARTS playing now: fire the gestures that rode ahead of
-    // it (so the pointer lands in sync with the heard voice) and mark
-    // narration active for the cursor's hold-in-place.
-    for (const g of next.gestures) this.emit('clicky_gesture', g);
-    this.emit('narrating', { active: true });
     this.audioEl.play().catch(() => {
       // Autoplay-blocked or load raced a teardown — free the slot so the
       // next file (or a later turn) isn't stuck behind a stale `playing`.
@@ -562,12 +502,9 @@ export class VoiceSession {
     } catch {
       /* element may already be torn down */
     }
-    this.audioQueue = [];
-    this.pendingGestures = [];
+    this.pendingAudio = [];
     this.playing = false;
     this.releaseCurrentUrl();
-    // Cancelled/torn-down audio: the pointer should stop holding position.
-    this.emit('narrating', { active: false });
   }
 
   private releaseCurrentUrl(): void {

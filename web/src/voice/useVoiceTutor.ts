@@ -15,59 +15,7 @@
  */
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { VoiceSession } from './voice';
-import type {
-  VoicePhase,
-  VoiceMessage,
-  WhiteboardPanelEvent,
-  WhiteboardPendingEvent,
-  WhiteboardErrorEvent,
-} from './types';
-import type { ClickyGestureEvent, WhiteboardPanel } from './whiteboard/types';
-
-/** Pure reducer that advances the whiteboard panel list from a WS event.
- *  Exported for unit testing without a live socket. Ported from Marfini's
- *  reduceWhiteboard — upsert by panelId so a panel whose `pending` was missed
- *  (WS reconnect) still lands instead of being dropped. */
-export function reduceWhiteboard(
-  panels: WhiteboardPanel[],
-  msg:
-    | ({ type: 'whiteboard_pending' } & WhiteboardPendingEvent)
-    | ({ type: 'whiteboard_panel' } & WhiteboardPanelEvent)
-    | ({ type: 'whiteboard_error' } & WhiteboardErrorEvent),
-): WhiteboardPanel[] {
-  switch (msg.type) {
-    case 'whiteboard_pending':
-      return [...panels, { panelId: msg.panelId, status: 'pending', intent: msg.intent }];
-    case 'whiteboard_panel': {
-      const ready: WhiteboardPanel = {
-        panelId: msg.panelId,
-        status: 'ready',
-        html: msg.html,
-        caption: msg.caption,
-        intent: msg.intent,
-        model: msg.model,
-        anchors: msg.anchors,
-      };
-      const exists = panels.some((p) => p.panelId === msg.panelId);
-      return exists
-        ? panels.map((p) => (p.panelId === msg.panelId ? { ...p, ...ready } : p))
-        : [...panels, ready];
-    }
-    case 'whiteboard_error': {
-      const exists = panels.some((p) => p.panelId === msg.panelId);
-      if (!exists) {
-        return [...panels, { panelId: msg.panelId, status: 'error', intent: msg.intent }];
-      }
-      return panels.map((p) =>
-        p.panelId === msg.panelId
-          ? { ...p, status: 'error' as const, intent: msg.intent ?? p.intent }
-          : p,
-      );
-    }
-    default:
-      return panels;
-  }
-}
+import type { VoicePhase, VoiceMessage } from './types';
 
 export interface UseVoiceTutorReturn {
   phase: VoicePhase;
@@ -89,20 +37,6 @@ export interface UseVoiceTutorReturn {
   speed: number;
   /** Change TTS speed for subsequent turns. Persists to localStorage. */
   setSpeed: (value: number) => void;
-  /** Whiteboard panels the tutor drew this session (oldest first). A pending
-   *  slot appears on a `[draw:…]` tag, then patches to ready/error. */
-  panels: WhiteboardPanel[];
-  /** Latest clicky gesture (null when idle). Newest wins — one cursor, one
-   *  gesture at a time. Fired in sync with the sentence it belongs to. */
-  activeGesture: ClickyGestureEvent | null;
-  /** Mark the active gesture finished (called by the cursor overlay). */
-  clearGesture: () => void;
-  /** Latest `[show:panel-N]` request — kept separate from activeGesture so a
-   *  following draw gesture can't clobber the board switch. `seq` re-fires. */
-  showPanelRequest: { anchor: string; seq: number } | null;
-  /** True while tutor audio is audibly playing on THIS client. Outlives
-   *  phase==='speaking'. */
-  narrating: boolean;
 }
 
 /** localStorage key for the TTS speed preference. Per-browser, not
@@ -125,12 +59,6 @@ export function useVoiceTutor(learnerId: string): UseVoiceTutorReturn {
   const [messages, setMessages] = useState<VoiceMessage[]>([]);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [isHolding, setIsHolding] = useState(false);
-  const [panels, setPanels] = useState<WhiteboardPanel[]>([]);
-  const [activeGesture, setActiveGesture] = useState<ClickyGestureEvent | null>(null);
-  const [showPanelRequest, setShowPanelRequest] =
-    useState<{ anchor: string; seq: number } | null>(null);
-  const showReqSeqRef = useRef(0);
-  const [narrating, setNarrating] = useState(false);
   const [speed, setSpeedState] = useState<number>(() => {
     const raw = window.localStorage.getItem(SPEED_PREF_KEY);
     const parsed = raw ? Number(raw) : NaN;
@@ -216,26 +144,6 @@ export function useVoiceTutor(learnerId: string): UseVoiceTutorReturn {
           });
         });
         voiceSession.on('error', ({ message }) => setErrorMsg(message));
-        voiceSession.on('whiteboard_pending', (e) =>
-          setPanels((prev) => reduceWhiteboard(prev, { type: 'whiteboard_pending', ...e })),
-        );
-        voiceSession.on('whiteboard_panel', (e) =>
-          setPanels((prev) => reduceWhiteboard(prev, { type: 'whiteboard_panel', ...e })),
-        );
-        voiceSession.on('whiteboard_error', (e) =>
-          setPanels((prev) => reduceWhiteboard(prev, { type: 'whiteboard_error', ...e })),
-        );
-        voiceSession.on('narrating', ({ active }) => setNarrating(active));
-        voiceSession.on('clicky_gesture', (e) => {
-          if (e.gesture === 'show') {
-            // Board-switch command — its own slot so a co-flushed draw gesture
-            // can't clobber it before the UI acts on the switch.
-            showReqSeqRef.current += 1;
-            setShowPanelRequest({ anchor: e.anchor, seq: showReqSeqRef.current });
-            return;
-          }
-          setActiveGesture(e); // latest wins — one cursor
-        });
 
         await voiceSession.connect();
         if (cancelled) {
@@ -339,7 +247,6 @@ export function useVoiceTutor(learnerId: string): UseVoiceTutorReturn {
   }, [startHold, endHold, cancelPlayback]);
 
   const clearError = useCallback(() => setErrorMsg(null), []);
-  const clearGesture = useCallback(() => setActiveGesture(null), []);
 
   const setSpeed = useCallback((value: number) => {
     if (!Number.isFinite(value) || value <= 0) return;
@@ -362,10 +269,5 @@ export function useVoiceTutor(learnerId: string): UseVoiceTutorReturn {
     clearError,
     speed,
     setSpeed,
-    panels,
-    activeGesture,
-    clearGesture,
-    showPanelRequest,
-    narrating,
   };
 }
