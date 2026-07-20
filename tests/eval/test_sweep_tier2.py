@@ -23,7 +23,7 @@ class _LLM:
 
 def _settings(**over):
     base = dict(
-        openrouter_api_key="k", openai_api_key="k", database_url="d",
+        dashscope_api_key="k", database_url="d",
         model_tutor="m", model_extractor="m", model_reflector="m", model_embedder="m",
     )
     return Settings(_env_file=None, **base, **over)

@@ -365,10 +365,8 @@ See `packages/engram-types/README.md`.
 | Variable | Purpose |
 |---|---|
 | `ENGRAM_DATABASE_URL` / `DATABASE_URL` | Postgres + pgvector DSN |
-| `OPENROUTER_API_KEY` (+ `OPENROUTER_BASE_URL`) | Chat provider (any OpenAI-compatible endpoint) |
-| `OPENAI_API_KEY` (+ `OPENAI_BASE_URL`) | Embeddings (default stack) |
-| `CEREBRAS_API_KEY` (+ `CEREBRAS_BASE_URL`) | **Optional** 429-fallback chat provider — used only when the primary exhausts retries on a rate limit (e.g. a daily token cap); never load-balanced |
-| `ENGRAM_MODEL_TUTOR/EXTRACTOR/REFLECTOR/EMBEDDER` | Role → model slugs (required) |
+| `DASHSCOPE_API_KEY` (+ `DASHSCOPE_BASE_URL`) | Alibaba Cloud Model Studio (DashScope) — chat, embeddings, and voice through one key; base URL defaults to the intl OpenAI-compatible endpoint |
+| `ENGRAM_MODEL_TUTOR/EXTRACTOR/REFLECTOR/EMBEDDER` | Role → model slugs (default `qwen-plus` / `text-embedding-v3`) |
 | `ENGRAM_MODEL_STUDENT/JUDGE` | Optional eval-role overrides (judge falls back to the reflector's model — set it to something cheap) |
 | `ENGRAM_TEMPERATURE_<ROLE>` | Optional per-role temperature (e.g. `ENGRAM_TEMPERATURE_EXTRACTOR=0`; unset = provider default) |
 | `ENGRAM_EVAL_PRICE_IN_PER_M` / `_OUT_PER_M` | Token prices so eval runs can meter cost / trip `--budget-usd` |

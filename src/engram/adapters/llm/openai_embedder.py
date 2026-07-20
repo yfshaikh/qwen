@@ -1,14 +1,14 @@
-"""OpenAI embeddings adapter (implements core.ports.EmbedderPort).
-
-Separate from the chat LLM because OpenRouter has no embeddings endpoint. The
-`dimensions` param truncates text-embedding-3-* to the configured size (1024) so
-it matches the pgvector column. DashScope's text-embedding-v4 is a drop-in swap
-later (same EmbedderPort).
-"""
+"""DashScope embeddings adapter over the OpenAI-compatible endpoint
+(implements core.ports.EmbedderPort). text-embedding-v3 at 1024 dims matches
+the pgvector `vector(1024)` column."""
 
 from __future__ import annotations
 
 from typing import Any, Protocol
+
+# DashScope caps embedding requests at 10 texts each; larger inputs are
+# chunked transparently.
+_MAX_BATCH = 10
 
 
 class _AsyncEmbeddingsClient(Protocol):
@@ -17,7 +17,7 @@ class _AsyncEmbeddingsClient(Protocol):
 
 
 class OpenAIEmbedder:
-    """Implements core.ports.EmbedderPort against the OpenAI embeddings API."""
+    """Implements core.ports.EmbedderPort against an OpenAI-compatible embeddings API."""
 
     def __init__(
         self,
@@ -30,20 +30,26 @@ class OpenAIEmbedder:
         self._dimensions = dimensions
 
     async def embed(self, texts: list[str]) -> list[list[float]]:
-        kwargs: dict[str, Any] = {"model": self._model, "input": texts}
-        if self._dimensions is not None:
-            kwargs["dimensions"] = self._dimensions
-        resp = await self._client.embeddings.create(**kwargs)
-        return [item.embedding for item in resp.data]
+        out: list[list[float]] = []
+        for i in range(0, len(texts), _MAX_BATCH):
+            kwargs: dict[str, Any] = {
+                "model": self._model,
+                "input": texts[i : i + _MAX_BATCH],
+            }
+            if self._dimensions is not None:
+                kwargs["dimensions"] = self._dimensions
+            resp = await self._client.embeddings.create(**kwargs)
+            out.extend(item.embedding for item in resp.data)
+        return out
 
 
 def build_embedder(settings: Any) -> OpenAIEmbedder:
-    """Composition helper: build the OpenAI embedder from Settings."""
+    """Composition helper: build the DashScope embedder from Settings."""
     from openai import AsyncOpenAI
 
     client = AsyncOpenAI(
-        api_key=settings.openai_api_key,
-        base_url=settings.openai_base_url,
+        api_key=settings.dashscope_api_key,
+        base_url=settings.dashscope_base_url,
     )
     return OpenAIEmbedder(
         client=client,

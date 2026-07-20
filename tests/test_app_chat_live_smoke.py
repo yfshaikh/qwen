@@ -1,4 +1,4 @@
-"""Opt-in: a real streamed /chat turn against OpenRouter + Postgres.
+"""Opt-in: a real streamed /chat turn against DashScope + Postgres.
 Skipped unless ENGRAM_LIVE_LLM=1 and ENGRAM_LIVE_DB=1 (and .env keys present)."""
 
 import os

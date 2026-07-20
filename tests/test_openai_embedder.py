@@ -45,3 +45,22 @@ async def test_embed_omits_dimensions_when_none():
     emb = OpenAIEmbedder(client=_FakeClient(rec), model="m", dimensions=None)
     await emb.embed(["x"])
     assert "dimensions" not in rec["kwargs"]
+
+
+async def test_embed_chunks_batches_of_ten_preserving_order():
+    """DashScope caps embedding input at 10 texts/request; 23 texts must go up
+    as 10+10+3 with results concatenated in order."""
+    calls = []
+
+    class _Embeddings:
+        async def create(self, **kwargs):
+            calls.append(kwargs["input"])
+            return _FakeEmbResponse([[float(t)] for t in kwargs["input"]])
+
+    class _Client:
+        embeddings = _Embeddings()
+
+    emb = OpenAIEmbedder(client=_Client(), model="m", dimensions=None)
+    vecs = await emb.embed([str(i) for i in range(23)])
+    assert [len(c) for c in calls] == [10, 10, 3]
+    assert vecs == [[float(i)] for i in range(23)]

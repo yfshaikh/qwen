@@ -1,7 +1,8 @@
 """env-loaded settings. The role->model map is the #1 cost lever (spec §2).
 
-Chat (tutor/extractor/reflector) goes through OpenRouter; embeddings go through
-OpenAI. Two providers, two keys, two base URLs.
+Everything runs on Alibaba Cloud Model Studio (DashScope): chat, embeddings,
+and ASR share the OpenAI-compatible endpoint; TTS uses the DashScope-native
+REST endpoint (see voice/tts.py). One provider, one key.
 """
 
 from __future__ import annotations
@@ -21,31 +22,20 @@ class Settings(BaseSettings):
         populate_by_name=True,
     )
 
-    # Chat provider (OpenRouter)
-    openrouter_api_key: str
-    openrouter_base_url: str = "https://openrouter.ai/api/v1"
-
-    # Optional 429 fallback chat provider (Cerebras). Set CEREBRAS_API_KEY to
-    # enable; absent = no fallback, primary errors surface unchanged. Used ONLY
-    # when the primary exhausts its retries on a rate limit — e.g. Groq's free
-    # tier's 200k tokens/day cap mid-eval. Model names are the primary's with
-    # the vendor prefix stripped ("openai/gpt-oss-120b" -> "gpt-oss-120b").
-    cerebras_api_key: str | None = Field(default=None, alias="CEREBRAS_API_KEY")
-    cerebras_base_url: str = Field(
-        default="https://api.cerebras.ai/v1", alias="CEREBRAS_BASE_URL")
-
-    # Embeddings provider (OpenAI)
-    openai_api_key: str
-    openai_base_url: str = "https://api.openai.com/v1"
+    # Alibaba Cloud Model Studio (DashScope). One key for chat + embeddings +
+    # ASR (OpenAI-compatible endpoint) and TTS (DashScope-native endpoint).
+    # The intl (Singapore) base URL is the hackathon-recognized one.
+    dashscope_api_key: str
+    dashscope_base_url: str = "https://dashscope-intl.aliyuncs.com/compatible-mode/v1"
 
     # Database
     database_url: str
 
-    # Role -> model
-    model_tutor: str = Field(alias="ENGRAM_MODEL_TUTOR")
-    model_extractor: str = Field(alias="ENGRAM_MODEL_EXTRACTOR")
-    model_reflector: str = Field(alias="ENGRAM_MODEL_REFLECTOR")
-    model_embedder: str = Field(alias="ENGRAM_MODEL_EMBEDDER")
+    # Role -> model (Qwen defaults; env-overridable per role)
+    model_tutor: str = Field(default="qwen-plus", alias="ENGRAM_MODEL_TUTOR")
+    model_extractor: str = Field(default="qwen-plus", alias="ENGRAM_MODEL_EXTRACTOR")
+    model_reflector: str = Field(default="qwen-plus", alias="ENGRAM_MODEL_REFLECTOR")
+    model_embedder: str = Field(default="text-embedding-v3", alias="ENGRAM_MODEL_EMBEDDER")
     model_student: str | None = Field(default=None, alias="ENGRAM_MODEL_STUDENT")
     model_judge: str | None = Field(default=None, alias="ENGRAM_MODEL_JUDGE")
 
@@ -93,11 +83,12 @@ class Settings(BaseSettings):
     audit_poll_seconds: float = Field(default=1.0, alias="ENGRAM_AUDIT_POLL_SECONDS")
     audit_page_limit: int = Field(default=100, alias="ENGRAM_AUDIT_PAGE_LIMIT")
 
-    # Voice (Deepgram) — optional; None disables the voice route.
-    deepgram_api_key: str | None = Field(default=None, alias="DEEPGRAM_API_KEY")
-    deepgram_stt_model: str = Field(default="nova-3", alias="DEEPGRAM_STT_MODEL")
-    deepgram_tts_model: str = Field(default="aura-2-thalia-en", alias="DEEPGRAM_TTS_MODEL")
-    deepgram_language: str | None = Field(default=None, alias="DEEPGRAM_LANGUAGE")
+    # Voice (DashScope) — same key as chat. ASR rides the OpenAI-compatible
+    # endpoint; TTS hits the multimodal-generation REST endpoint.
+    stt_model: str = Field(default="qwen3-asr-flash", alias="ENGRAM_STT_MODEL")
+    stt_language: str | None = Field(default=None, alias="ENGRAM_STT_LANGUAGE")
+    tts_model: str = Field(default="qwen3-tts-flash", alias="ENGRAM_TTS_MODEL")
+    tts_voice: str = Field(default="Cherry", alias="ENGRAM_TTS_VOICE")
 
     # Eval harness (spec: eval-harness-v2)
     eval_ui: bool = Field(default=False, alias="ENGRAM_EVAL_UI")

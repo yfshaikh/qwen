@@ -26,9 +26,9 @@ def _settings():
     # field names directly.
     from engram.app.config import Settings
     return Settings(
-        openrouter_api_key="x", openai_api_key="x", database_url="x",
+        dashscope_api_key="x", database_url="x",
         model_tutor="m", model_extractor="m", model_reflector="m", model_embedder="m",
-        deepgram_api_key="K", _env_file=None,
+        _env_file=None,
     )
 
 
@@ -53,11 +53,11 @@ async def test_memory_status_endpoint(eng):
 
 
 def test_voice_ws_turn(eng, monkeypatch):
-    # Stub the Deepgram adapters so no network is touched.
+    # Stub the DashScope voice adapters so no network is touched.
     async def fake_transcribe(audio, mime, *, api_key, model, language=None):
         return "what are limits"
 
-    async def fake_stream_speech(text, *, api_key, model):
+    async def fake_stream_speech(text, *, api_key, model, voice="Cherry"):
         yield b"MP3"
 
     monkeypatch.setattr("engram.voice.routes.stt_transcribe", fake_transcribe)

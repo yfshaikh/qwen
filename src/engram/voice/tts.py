@@ -1,5 +1,10 @@
-"""Deepgram Aura streaming TTS over httpx. Port of Marfini api/voice_tutor/tts.py.
-Splits over Deepgram's 2000-char cap and speaks every piece (no silent truncation)."""
+"""Qwen TTS (qwen3-tts-flash) over DashScope's multimodal-generation REST
+endpoint via httpx. Each request returns a short-lived URL to a complete WAV
+file (24kHz 16-bit mono); we download it and yield it as a SINGLE bytes object
+per sentence. That one-message-per-utterance framing is load-bearing: the WS
+preserves message boundaries, so the client receives each sentence as one
+complete, playable audio file (see web/src/voice/voice.ts).
+Splits long text and speaks every piece (no silent truncation)."""
 
 from __future__ import annotations
 
@@ -7,7 +12,7 @@ from collections.abc import AsyncIterator
 
 import httpx
 
-_SPEAK_URL = "https://api.deepgram.com/v1/speak"
+_TTS_URL = "https://dashscope-intl.aliyuncs.com/api/v1/services/aigc/multimodal-generation/generation"
 
 
 def _transport() -> httpx.AsyncBaseTransport | None:
@@ -40,16 +45,17 @@ def split_for_tts(text: str, limit: int = 2000) -> list[str]:
 
 
 async def stream_speech(
-    text: str, *, api_key: str, model: str
+    text: str, *, api_key: str, model: str, voice: str = "Cherry"
 ) -> AsyncIterator[bytes]:
-    headers = {"Authorization": f"Token {api_key}", "Content-Type": "application/json"}
-    params = {"model": model, "encoding": "mp3"}
-    async with httpx.AsyncClient(transport=_transport(), timeout=30.0) as c:
+    headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
+    async with httpx.AsyncClient(transport=_transport(), timeout=60.0) as c:
         for piece in split_for_tts(text):
-            async with c.stream(
-                "POST", _SPEAK_URL, params=params, headers=headers, json={"text": piece}
-            ) as r:
-                r.raise_for_status()
-                async for chunk in r.aiter_bytes():
-                    if chunk:
-                        yield chunk
+            r = await c.post(_TTS_URL, headers=headers, json={
+                "model": model,
+                "input": {"text": piece, "voice": voice, "language_type": "Auto"},
+            })
+            r.raise_for_status()
+            url = r.json()["output"]["audio"]["url"]  # valid ~24h; fetch now
+            audio = await c.get(url)
+            audio.raise_for_status()
+            yield audio.content  # one complete WAV = one WS message

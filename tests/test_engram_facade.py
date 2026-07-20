@@ -126,13 +126,12 @@ async def test_mem0_aliases_point_at_canonical_verbs():
 
 def test_from_env_wires_real_adapters(monkeypatch):
     env = {
-        "OPENROUTER_API_KEY": "sk-or-test",
-        "OPENAI_API_KEY": "sk-test",
+        "DASHSCOPE_API_KEY": "sk-ds-test",
         "DATABASE_URL": "postgresql://engram:engram@localhost:5432/engram",
-        "ENGRAM_MODEL_TUTOR": "qwen/tutor",
-        "ENGRAM_MODEL_EXTRACTOR": "qwen/extract",
-        "ENGRAM_MODEL_REFLECTOR": "qwen/reflect",
-        "ENGRAM_MODEL_EMBEDDER": "text-embedding-3-small",
+        "ENGRAM_MODEL_TUTOR": "qwen-plus",
+        "ENGRAM_MODEL_EXTRACTOR": "qwen-plus",
+        "ENGRAM_MODEL_REFLECTOR": "qwen-plus",
+        "ENGRAM_MODEL_EMBEDDER": "text-embedding-v3",
     }
     for k, v in env.items():
         monkeypatch.setenv(k, v)

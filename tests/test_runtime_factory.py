@@ -9,8 +9,7 @@ from engram.core.config import KeeperConfig, RecallConfig
 from engram.runtime.factory import configs_from_settings, from_env
 
 BASE_ENV = dict(
-    OPENROUTER_API_KEY="sk-or-test",
-    OPENAI_API_KEY="sk-test",
+    DASHSCOPE_API_KEY="sk-ds-test",
     DATABASE_URL="postgresql://engram:engram@localhost:5432/engram",
     ENGRAM_MODEL_TUTOR="m",
     ENGRAM_MODEL_EXTRACTOR="m",

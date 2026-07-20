@@ -25,7 +25,7 @@ def _pipeline(eng, *, stt_text="what are limits", tts_ok=True):
     async def fake_transcribe(audio, mime, *, api_key, model, language=None):
         return stt_text
 
-    async def fake_stream_speech(text, *, api_key, model):
+    async def fake_stream_speech(text, *, api_key, model, voice="Cherry"):
         if not tts_ok:
             raise RuntimeError("tts down")
         yield b"MP3"

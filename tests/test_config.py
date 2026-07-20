@@ -3,15 +3,12 @@ import pytest
 from engram.app.config import Settings
 
 BASE_ENV = {
-    "OPENROUTER_API_KEY": "sk-or-test",
-    "OPENROUTER_BASE_URL": "https://openrouter.ai/api/v1",
-    "OPENAI_API_KEY": "sk-test",
-    "OPENAI_BASE_URL": "https://api.openai.com/v1",
+    "DASHSCOPE_API_KEY": "sk-ds-test",
     "DATABASE_URL": "postgresql://engram:engram@localhost:5432/engram",
-    "ENGRAM_MODEL_TUTOR": "qwen/qwen3-vl-235b-a22b-instruct",
-    "ENGRAM_MODEL_EXTRACTOR": "qwen/qwen-turbo",
-    "ENGRAM_MODEL_REFLECTOR": "qwen/qwen-max",
-    "ENGRAM_MODEL_EMBEDDER": "text-embedding-3-small",
+    "ENGRAM_MODEL_TUTOR": "qwen-max",
+    "ENGRAM_MODEL_EXTRACTOR": "qwen-turbo",
+    "ENGRAM_MODEL_REFLECTOR": "qwen-plus",
+    "ENGRAM_MODEL_EMBEDDER": "text-embedding-v4",
 }
 
 
@@ -25,17 +22,31 @@ def _settings(monkeypatch, **overrides):
 
 def test_loads_from_env(monkeypatch):
     s = _settings(monkeypatch)
-    assert s.openrouter_api_key == "sk-or-test"
+    assert s.dashscope_api_key == "sk-ds-test"
+    assert s.dashscope_base_url == "https://dashscope-intl.aliyuncs.com/compatible-mode/v1"
     assert s.database_url.endswith("/engram")
     assert s.embedding_dim == 1024  # default
 
 
 def test_model_for_resolves_roles(monkeypatch):
     s = _settings(monkeypatch)
-    assert s.model_for("tutor") == "qwen/qwen3-vl-235b-a22b-instruct"
-    assert s.model_for("extractor") == "qwen/qwen-turbo"
-    assert s.model_for("reflector") == "qwen/qwen-max"
-    assert s.model_for("embedder") == "text-embedding-3-small"
+    assert s.model_for("tutor") == "qwen-max"
+    assert s.model_for("extractor") == "qwen-turbo"
+    assert s.model_for("reflector") == "qwen-plus"
+    assert s.model_for("embedder") == "text-embedding-v4"
+
+
+def test_model_defaults_are_qwen(monkeypatch):
+    for k in ("ENGRAM_MODEL_TUTOR", "ENGRAM_MODEL_EXTRACTOR",
+              "ENGRAM_MODEL_REFLECTOR", "ENGRAM_MODEL_EMBEDDER"):
+        monkeypatch.delenv(k, raising=False)
+    monkeypatch.setenv("DASHSCOPE_API_KEY", "sk-ds-test")
+    monkeypatch.setenv("DATABASE_URL", "postgresql://x")
+    s = Settings(_env_file=None)
+    assert s.model_for("tutor") == "qwen-plus"
+    assert s.model_for("extractor") == "qwen-plus"
+    assert s.model_for("reflector") == "qwen-plus"
+    assert s.model_for("embedder") == "text-embedding-v3"
 
 
 def test_model_for_unknown_role_raises(monkeypatch):

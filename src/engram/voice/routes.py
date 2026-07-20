@@ -59,13 +59,13 @@ async def voice(ws: WebSocket, learner_id: str, eng=Depends(get_engram)):
     # NB: inject via Depends (not a direct get_engram() call) so tests'
     # app.dependency_overrides[get_engram] takes effect on the WS route too.
     s = eng.settings
-    if not s or not getattr(s, "deepgram_api_key", None):
+    if not s or not getattr(s, "dashscope_api_key", None):
         await ws.close(code=1011)
         return
     await ws.accept()
     pipeline = VoicePipeline(
-        eng, api_key=s.deepgram_api_key, stt_model=s.deepgram_stt_model,
-        tts_model=s.deepgram_tts_model, language=s.deepgram_language,
+        eng, api_key=s.dashscope_api_key, stt_model=s.stt_model,
+        tts_model=s.tts_model, tts_voice=s.tts_voice, language=s.stt_language,
         transcribe=stt_transcribe, stream_speech=tts_stream_speech,
     )
     session_id = await eng.create_voice_session(learner_id)

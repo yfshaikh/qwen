@@ -3,7 +3,7 @@ from engram.app.config import Settings
 def _settings(**over):
     base = dict(
         _env_file=None,
-        openrouter_api_key="k", openai_api_key="k", database_url="postgresql://x",
+        dashscope_api_key="k", database_url="postgresql://x",
         model_tutor="t", model_extractor="x", model_reflector="r", model_embedder="e",
     )
     base.update(over)

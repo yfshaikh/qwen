@@ -1,4 +1,4 @@
-/** Voice tutor client: WebSocket + MediaRecorder + streaming MP3 playback.
+/** Voice tutor client: WebSocket + MediaRecorder + queued audio playback.
  *
  *  Wraps three browser APIs that don't naturally compose:
  *
@@ -14,11 +14,13 @@
  *    event — otherwise the server runs STT before the last 150ms of audio
  *    arrives.
  *
- *  - `MediaSource` to play streamed MP3 audio as it arrives. One
- *    `MediaSource` lives for the lifetime of the connection; each turn
- *    appends to the same SourceBuffer so the audio element doesn't have
- *    to be torn down/rebuilt between turns. `appendBuffer` is async and
- *    serial, so we queue chunks and drain on `updateend`.
+ *  - A Blob-URL playback queue. The server sends each sentence's TTS as ONE
+ *    complete audio file (one WS binary message = one file — the WS preserves
+ *    message boundaries). We queue the files and play them one at a time
+ *    through a single `<audio>` element, advancing on `ended`. Format-agnostic
+ *    (the audio element decodes WAV/MP3/etc natively) — which is why this
+ *    replaced the old MP3-only `MediaSource` path when TTS moved to DashScope's
+ *    WAV output.
  *
  *  Event delivery is a small typed pub-sub — no need to pull in an event
  *  emitter library. Callers do `session.on('transcript', cb)` and get
@@ -61,11 +63,13 @@ export class VoiceSession {
   private mediaRecorder: MediaRecorder | null = null;
 
   private audioEl: HTMLAudioElement | null = null;
-  private mediaSource: MediaSource | null = null;
-  private sourceBuffer: SourceBuffer | null = null;
+  /** Queue of complete audio files (one per sentence) awaiting playback. */
   private pendingAudio: ArrayBuffer[] = [];
-  /** Tracked so disconnect() can revokeObjectURL and avoid leaking the
-   *  blob URL across remounts. */
+  /** True while an utterance is playing; gates the queue so the next file
+   *  starts only once the element is free (on `ended`). */
+  private playing = false;
+  /** Object URL of the file currently loaded in the element, tracked so we
+   *  can revoke it on advance/interrupt/disconnect and not leak blobs. */
   private audioObjectUrl: string | null = null;
   /** Set by interrupt() only when a turn is actually in flight; cleared
    *  on the next status:idle or turn_done. While true, incoming binary
@@ -166,19 +170,7 @@ export class VoiceSession {
    *  in-progress audio playback, tear down the WS + MediaSource. Safe to
    *  call multiple times. */
   async disconnect(): Promise<void> {
-    // STOP THE AUDIO FIRST. The MediaSource decoder buffers ahead of the
-    // playhead, so just closing the WS or tearing down MSE doesn't halt
-    // playback — the element keeps rendering decoded bytes for a beat.
-    // Pause + clear src + load() forces the element to drop its decoded
-    // buffer immediately so leaving the page actually silences the tutor.
-    try {
-      this.audioEl?.pause();
-      this.audioEl?.removeAttribute('src');
-      this.audioEl?.load();
-    } catch {
-      /* element may already be torn down */
-    }
-
+    this.stopPlayback();
     this.send({ type: 'goodbye' });
 
     if (this.mediaRecorder && this.mediaRecorder.state !== 'inactive') {
@@ -202,25 +194,6 @@ export class VoiceSession {
       this.ws = null;
     }
 
-    if (this.mediaSource && this.mediaSource.readyState === 'open') {
-      try {
-        this.mediaSource.endOfStream();
-      } catch {
-        /* not in a state to end */
-      }
-    }
-    this.sourceBuffer = null;
-    this.mediaSource = null;
-    this.pendingAudio = [];
-
-    if (this.audioObjectUrl) {
-      try {
-        URL.revokeObjectURL(this.audioObjectUrl);
-      } catch {
-        /* already revoked or never created */
-      }
-      this.audioObjectUrl = null;
-    }
   }
 
   // ---------------------------------------------------------------------
@@ -240,39 +213,7 @@ export class VoiceSession {
    *  server-side cancel needs the loop to run the turn as a background
    *  task. */
   interrupt(): void {
-    // Stop audio first — same ordering reason as disconnect():
-    // MediaSource decoders buffer ahead of the playhead.
-    try {
-      this.audioEl?.pause();
-      this.audioEl?.removeAttribute('src');
-      this.audioEl?.load();
-    } catch {
-      /* element may already be torn down */
-    }
-
-    this.pendingAudio = [];
-
-    if (this.mediaSource && this.mediaSource.readyState === 'open') {
-      try {
-        this.mediaSource.endOfStream();
-      } catch {
-        /* not in a state to end */
-      }
-    }
-    if (this.audioObjectUrl) {
-      try {
-        URL.revokeObjectURL(this.audioObjectUrl);
-      } catch {
-        /* already revoked */
-      }
-      this.audioObjectUrl = null;
-    }
-    this.sourceBuffer = null;
-    this.mediaSource = null;
-
-    // Rebuild playback machinery so the next turn streams normally.
-    // No-op if MSE isn't supported (warn already logged at setup time).
-    this.setupPlayback();
+    this.stopPlayback();
 
     // Gate incoming audio frames ONLY if there was actually a turn
     // streaming — otherwise the new turn the user is about to start
@@ -522,57 +463,58 @@ export class VoiceSession {
   }
 
   private setupPlayback(): void {
-    // Bail gracefully if the browser can't stream MP3 via MSE. Safari
-    // versions before 17.4 fall into this; for those we'd need
-    // ManagedMediaSource or a different transport. Out of scope for
-    // MVP — the WS still works, just silently with no audio.
-    if (
-      typeof MediaSource === 'undefined' ||
-      !MediaSource.isTypeSupported('audio/mpeg')
-    ) {
-      console.warn(
-        'MediaSource audio/mpeg not supported; voice replies will be silent',
-      );
-      return;
-    }
+    // Advance the queue when the current file finishes (or errors — a
+    // decode failure on one sentence must not stall the rest).
     if (!this.audioEl) return;
-    this.mediaSource = new MediaSource();
-    this.audioObjectUrl = URL.createObjectURL(this.mediaSource);
-    this.audioEl.src = this.audioObjectUrl;
-
-    this.mediaSource.addEventListener(
-      'sourceopen',
-      () => {
-        const sb = this.mediaSource!.addSourceBuffer('audio/mpeg');
-        sb.addEventListener('updateend', () => this.drainPlayback());
-        this.sourceBuffer = sb;
-        this.drainPlayback();
-      },
-      { once: true },
-    );
+    const advance = () => {
+      this.releaseCurrentUrl();
+      this.playing = false;
+      this.drainPlayback();
+    };
+    this.audioEl.addEventListener('ended', advance);
+    this.audioEl.addEventListener('error', advance);
   }
 
   private drainPlayback(): void {
-    const sb = this.sourceBuffer;
-    if (!sb || sb.updating) return;
+    if (this.playing || !this.audioEl) return;
     const next = this.pendingAudio.shift();
     if (!next) return;
+    this.playing = true;
+    // Each queued item is a COMPLETE audio file; a Blob URL lets the
+    // element decode it natively (WAV today, any container tomorrow).
+    this.audioObjectUrl = URL.createObjectURL(new Blob([next]));
+    this.audioEl.src = this.audioObjectUrl;
+    this.audioEl.playbackRate = this.playbackRate;
+    this.audioEl.play().catch(() => {
+      // Autoplay-blocked or load raced a teardown — free the slot so the
+      // next file (or a later turn) isn't stuck behind a stale `playing`.
+      this.playing = false;
+    });
+  }
+
+  /** Halt playback and drop everything queued. Shared by interrupt() and
+   *  disconnect(): pause the element, clear its source, empty the queue. */
+  private stopPlayback(): void {
     try {
-      sb.appendBuffer(next);
-    } catch (err) {
-      // QuotaExceededError after many turns is the realistic case here;
-      // the simple fix is to drop the chunk — small visible glitch beats
-      // throwing in the middle of playback. A nicer fix is to remove
-      // already-played ranges, but it's not worth the complexity for
-      // MVP.
-      console.warn('VoiceSession appendBuffer failed:', err);
+      this.audioEl?.pause();
+      this.audioEl?.removeAttribute('src');
+      this.audioEl?.load();
+    } catch {
+      /* element may already be torn down */
     }
-    // If the element ran dry between turns and paused itself, a fresh
-    // appendBuffer doesn't auto-resume — kick it.
-    if (this.audioEl?.paused) {
-      this.audioEl.play().catch(() => {
-        /* autoplay-blocked browsers (rare for in-tab MediaSource) */
-      });
+    this.pendingAudio = [];
+    this.playing = false;
+    this.releaseCurrentUrl();
+  }
+
+  private releaseCurrentUrl(): void {
+    if (this.audioObjectUrl) {
+      try {
+        URL.revokeObjectURL(this.audioObjectUrl);
+      } catch {
+        /* already revoked */
+      }
+      this.audioObjectUrl = null;
     }
   }
 }

@@ -1,5 +1,5 @@
-"""Opt-in smoke test: real OpenRouter extraction. Skipped unless ENGRAM_LIVE_LLM=1
-and the relevant keys are set. Not part of normal CI runs."""
+"""Opt-in smoke test: real DashScope extraction. Skipped unless ENGRAM_LIVE_LLM=1
+and DASHSCOPE_API_KEY is set. Not part of normal CI runs."""
 
 import os
 

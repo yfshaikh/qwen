@@ -78,8 +78,7 @@ async def test_turn_reads_history_turns_from_settings(monkeypatch):
     from engram.app.config import Settings
     from engram.runtime.factory import configs_from_settings
 
-    monkeypatch.setenv("OPENROUTER_API_KEY", "sk-or-test")
-    monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
+    monkeypatch.setenv("DASHSCOPE_API_KEY", "sk-ds-test")
     monkeypatch.setenv("DATABASE_URL", "postgresql://engram:engram@localhost:5432/engram")
     monkeypatch.setenv("ENGRAM_MODEL_TUTOR", "m")
     monkeypatch.setenv("ENGRAM_MODEL_EXTRACTOR", "m")

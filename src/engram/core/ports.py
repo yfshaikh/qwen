@@ -1,8 +1,8 @@
 """The agnostic surface. Protocols only — no third-party imports, no bodies.
 
-LLMPort and EmbedderPort are deliberately separate: the chat provider
-(OpenRouter) and the embeddings provider (OpenAI) are different services in this
-build. Splitting them lets each be swapped independently (e.g. DashScope later).
+LLMPort and EmbedderPort are deliberately separate so chat and embeddings can
+be swapped independently. Both currently point at DashScope's OpenAI-compatible
+endpoint (Qwen models), but nothing here assumes that.
 """
 
 from __future__ import annotations

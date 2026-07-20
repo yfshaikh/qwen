@@ -11,7 +11,7 @@ from engram.app.config import Settings
 from engram.core.config import KeeperConfig, RecallConfig
 
 BASE_ENV = dict(
-    openrouter_api_key="k", openai_api_key="k", database_url="d",
+    dashscope_api_key="k", database_url="d",
     model_tutor="m", model_extractor="m", model_reflector="m", model_embedder="m",
 )
 

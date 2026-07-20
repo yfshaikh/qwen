@@ -3,7 +3,7 @@
 
 Prereqs:
   1. Docker Postgres up:   docker compose up -d
-  2. Real keys in .env:    cp .env.example .env   # then add OPENROUTER_API_KEY + OPENAI_API_KEY
+  2. Real keys in .env:    cp .env.example .env   # then add DASHSCOPE_API_KEY
 Run:
   .venv/bin/python scripts/demo_chat.py
 
@@ -111,7 +111,7 @@ def main() -> int:
             tail = "\n".join(open(LOG).read().splitlines()[-12:])
             print(
                 f"{RED}Server didn't start — most likely .env is missing or incomplete.{RESET}\n"
-                "Need: OPENROUTER_API_KEY, OPENAI_API_KEY, the 4 ENGRAM_MODEL_*, DATABASE_URL.\n"
+                "Need: DASHSCOPE_API_KEY and DATABASE_URL (models default to Qwen).\n"
                 "Fix:  cp .env.example .env  # then add your real keys\n"
                 f"{DIM}--- uvicorn log tail ---\n{tail}{RESET}"
             )

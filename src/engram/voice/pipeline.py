@@ -24,12 +24,14 @@ SendBytes = Callable[[bytes], Awaitable[None]]
 class VoicePipeline:
     def __init__(
         self, eng: Any, *, api_key: str, stt_model: str, tts_model: str,
-        language: str | None = None, transcribe=None, stream_speech=None,
+        tts_voice: str = "Cherry", language: str | None = None,
+        transcribe=None, stream_speech=None,
     ) -> None:
         self.eng = eng
         self.api_key = api_key
         self.stt_model = stt_model
         self.tts_model = tts_model
+        self.tts_voice = tts_voice
         self.language = language
         # Injectable for tests; default to the real adapters.
         self._transcribe = transcribe or stt_mod.transcribe
@@ -80,7 +82,7 @@ class VoicePipeline:
             return False
         try:
             async for chunk in self._stream_speech(
-                text, api_key=self.api_key, model=self.tts_model
+                text, api_key=self.api_key, model=self.tts_model, voice=self.tts_voice
             ):
                 await send_bytes(chunk)
             return True

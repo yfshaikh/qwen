@@ -80,20 +80,21 @@ docker compose up -d          # local pgvector on :5432; auto-applies migrations
 
 | Var | What |
 |---|---|
-| `OPENROUTER_API_KEY` | OpenRouter key — chat models (tutor / extractor / reflector) |
-| `OPENAI_API_KEY` | OpenAI key — embeddings |
+| `DASHSCOPE_API_KEY` | Alibaba Cloud Model Studio (DashScope) key — chat, embeddings, and voice |
 | `DATABASE_URL` | Postgres DSN. For the local Docker DB: `postgresql://engram:engram@localhost:5432/engram` |
-| `ENGRAM_MODEL_TUTOR` | chat model for the live tutor turn (e.g. `qwen/qwen-2.5-72b-instruct`) |
-| `ENGRAM_MODEL_EXTRACTOR` | chat model for the Keeper's extraction pass |
-| `ENGRAM_MODEL_REFLECTOR` | chat model for the Keeper's merge / contradiction checks |
-| `ENGRAM_MODEL_EMBEDDER` | embedding model (e.g. `text-embedding-3-small`) |
 
 **Optional** (sensible defaults — see `src/engram/app/config.py`):
 
 | Var | Default | What |
 |---|---|---|
-| `OPENROUTER_BASE_URL` | `https://openrouter.ai/api/v1` | chat base URL (swap for DashScope, etc.) |
-| `OPENAI_BASE_URL` | `https://api.openai.com/v1` | embeddings base URL |
+| `DASHSCOPE_BASE_URL` | `https://dashscope-intl.aliyuncs.com/compatible-mode/v1` | OpenAI-compatible base URL (intl/Singapore) |
+| `ENGRAM_MODEL_TUTOR` | `qwen-plus` | chat model for the live tutor turn |
+| `ENGRAM_MODEL_EXTRACTOR` | `qwen-plus` | chat model for the Keeper's extraction pass |
+| `ENGRAM_MODEL_REFLECTOR` | `qwen-plus` | chat model for the Keeper's merge / contradiction checks |
+| `ENGRAM_MODEL_EMBEDDER` | `text-embedding-v3` | embedding model (1024-dim default) |
+| `ENGRAM_STT_MODEL` | `qwen3-asr-flash` | voice: speech-to-text model |
+| `ENGRAM_TTS_MODEL` | `qwen3-tts-flash` | voice: text-to-speech model |
+| `ENGRAM_TTS_VOICE` | `Cherry` | voice: TTS voice name |
 | `ENGRAM_EMBEDDING_DIM` | `1024` | embedding dim — **must match** the DB `vector(1024)` column |
 | `ENGRAM_RECALL_*` | see config | recall scoring weights + traversal (eval sweeps) |
 | `ENGRAM_KEEPER_*` | see config | consolidation thresholds (eval sweeps) |
