@@ -92,9 +92,12 @@ interface WhiteboardProps {
   onExit: () => void
   /** Point the clicky cursor at an anchor (used by "Point" on the current panel). */
   onPoint?: (anchor: string) => void
+  /** Tutor `[show:panel-N]` request: switch to this panelId. `seq` bumps so the
+   *  same panel can be re-requested. */
+  showPanel?: { panelId: string; seq: number } | null
 }
 
-export function Whiteboard({ panels, generating, error, onDraw, onDelete, onExit, onPoint }: WhiteboardProps) {
+export function Whiteboard({ panels, generating, error, onDraw, onDelete, onExit, onPoint, showPanel }: WhiteboardProps) {
   const [currentId, setCurrentId] = useState<string | null>(null)
   const [intent, setIntent] = useState('')
   const iframeRef = useRef<HTMLIFrameElement | null>(null)
@@ -125,6 +128,15 @@ export function Whiteboard({ panels, generating, error, onDraw, onDelete, onExit
     if (panels.length) setCurrentId(panels[panels.length - 1].panelId)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [panels.length])
+
+  // Tutor asked to bring an earlier panel back ([show:panel-N]). Keyed on seq
+  // so the same panel can be re-requested; ignore an unknown id.
+  useEffect(() => {
+    if (showPanel && panels.some((p) => p.panelId === showPanel.panelId)) {
+      setCurrentId(showPanel.panelId)
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [showPanel?.seq])
 
   const current = panels.find((p) => p.panelId === currentId) ?? panels[panels.length - 1]
 

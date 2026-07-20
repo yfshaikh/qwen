@@ -37,8 +37,49 @@ export default function App() {
   const [refreshKey, setRefreshKey] = useState(0)
 
   const voice = useVoiceTutor(learner)
-  const wb = useWhiteboard(learner)
+  const wb = useWhiteboard(learner) // manual REST draw — fallback path
   const [showBoard, setShowBoard] = useState(false)
+  const [dismissed, setDismissed] = useState<Set<string>>(new Set())
+
+  // Panels shown on the board: the tutor's voice-driven panels first, then any
+  // manually-drawn ones, minus dismissed. The voice loop is the primary path —
+  // a [draw:…] tag mid-answer renders a panel here with no button press.
+  const boardPanels = useMemo(
+    () => [...voice.panels, ...wb.panels].filter((p) => !dismissed.has(p.panelId)),
+    [voice.panels, wb.panels, dismissed],
+  )
+
+  // Auto-open the board the moment the tutor draws something.
+  useEffect(() => {
+    if (voice.panels.length > 0) setShowBoard(true)
+  }, [voice.panels.length])
+
+  // One cursor, one gesture. Mirror the tutor's speech-synced activeGesture
+  // into local state; a manual "Point" click feeds the same slot.
+  const [gesture, setGesture] = useState<ClickyGestureEvent | null>(null)
+  useEffect(() => {
+    if (voice.activeGesture) setGesture(voice.activeGesture)
+  }, [voice.activeGesture])
+  const onGestureDone = useCallback(() => {
+    setGesture(null)
+    voice.clearGesture()
+  }, [voice.clearGesture])
+
+  // Resolve a [show:panel-N] request to the current panelId, bumping seq so the
+  // Whiteboard re-switches even to the same panel.
+  const showPanel = useMemo(() => {
+    const req = voice.showPanelRequest
+    if (!req) return null
+    const m = /panel-(\d+)/.exec(req.anchor)
+    if (!m) return null
+    const p = boardPanels[Number(m[1]) - 1]
+    return p ? { panelId: p.panelId, seq: req.seq } : null
+  }, [voice.showPanelRequest, boardPanels])
+
+  const deleteBoardPanel = useCallback((id: string) => {
+    setDismissed((s) => new Set(s).add(id))
+    wb.deletePanel(id)
+  }, [wb])
 
   // Text selection → clicky "Ask about this" menu. Active only while the board
   // is open (that's where the cursor lives). Asking draws a diagram of the
@@ -288,13 +329,16 @@ export default function App() {
           {showBoard && (
             <div className="absolute inset-0 z-10">
               <Whiteboard
-                panels={wb.panels}
+                panels={boardPanels}
                 generating={wb.generating}
                 error={wb.error}
                 onDraw={wb.draw}
-                onDelete={wb.deletePanel}
+                onDelete={deleteBoardPanel}
                 onExit={() => setShowBoard(false)}
-                onPoint={(a) => wb.fireGesture(a, 'circle')}
+                onPoint={(a) =>
+                  setGesture({ gestureId: `m-${Date.now()}`, anchor: a, gesture: 'circle' })
+                }
+                showPanel={showPanel}
               />
             </div>
           )}
@@ -307,9 +351,9 @@ export default function App() {
       </footer>
       <ClickyCursor
         active={showBoard}
-        speaking={voice.phase === 'speaking'}
-        gesture={wb.gesture}
-        onDone={wb.onGestureDone}
+        speaking={voice.phase === 'speaking' || voice.narrating}
+        gesture={gesture}
+        onDone={onGestureDone}
       />
         </>
       )}
