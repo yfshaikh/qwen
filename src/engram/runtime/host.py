@@ -95,6 +95,10 @@ class EngramHost:
         self._tasks: set[asyncio.Task] = set()          # Task 4 fills these
         self._consolidating: dict[str, dict] = {}       # Task 4
         self._seeding: dict[str, asyncio.Task] = {}     # in-flight ontology seeds
+        # learner_id -> most recent ConsolidationReport. consolidate_soon is
+        # fire-and-forget, so without this the report is visible only in logs —
+        # hosts that render a "keeper log" (Marfini's memory page) read it here.
+        self._last_reports: dict[str, ConsolidationReport] = {}
         # test seam: swap the factory without touching Engram
         from engram.runtime.factory import from_env
         self._engram_factory = from_env
@@ -241,6 +245,7 @@ class EngramHost:
             while True:
                 try:
                     report = await self.memory.consolidate(learner_id)
+                    self._last_reports[learner_id] = report
                     logger.info("consolidation for %s complete: %s", learner_id, report)
                 except asyncio.CancelledError:
                     raise
@@ -255,6 +260,11 @@ class EngramHost:
 
     def is_consolidating(self, learner_id: str) -> bool:
         return learner_id in self._consolidating
+
+    def last_report(self, learner_id: str) -> ConsolidationReport | None:
+        """Most recent consolidation report for this learner, or None if this
+        process hasn't consolidated it yet. Per-process, like the status flag."""
+        return self._last_reports.get(learner_id)
 
     # --- turn logging (E4) ------------------------------------------------
 

@@ -158,6 +158,24 @@ async def test_aclose_cancels_inflight_consolidation():
     assert host.is_consolidating("L") is False
 
 
+async def test_last_report_captures_consolidation_result():
+    import asyncio
+    eng = _SlowConsolidateEngram()
+    host = EngramHost(eng)
+    await host.start()
+    assert host.last_report("L") is None         # nothing consolidated yet
+    host.consolidate_soon("L")
+    eng.gate.set()
+    for _ in range(20):
+        await asyncio.sleep(0)
+        if not host.is_consolidating("L"):
+            break
+    report = host.last_report("L")
+    assert report is not None and report.learner_id == "L"
+    assert host.last_report("other") is None     # per-learner isolation
+    await host.aclose()
+
+
 # --- ontology seeding (seed_soon + consolidation gate) -----------------------
 
 class _SeedThenConsolidateEngram:
